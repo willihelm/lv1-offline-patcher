@@ -251,20 +251,36 @@
         {/if}
       </aside>
 
-      <div class="panel gridpanel">
+      {#snippet tools()}
         <div class="tools">
-          <button class="icon" onclick={() => (cell = Math.max(18, cell - 4))} title="Zoom out">−</button>
-          <button class="icon" onclick={() => (cell = Math.min(48, cell + 4))} title="Zoom in">+</button>
+          <div class="zoom">
+            <button class="icon" onclick={() => (cell = Math.max(18, cell - 4))} title="Zoom out">
+              <svg class="zoomicon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="10" cy="10" r="6.5" /><path d="M15 15l5.5 5.5M7 10h6" />
+              </svg>
+            </button>
+            <button class="icon" onclick={() => (cell = Math.min(48, cell + 4))} title="Zoom in">
+              <svg class="zoomicon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="10" cy="10" r="6.5" /><path d="M15 15l5.5 5.5M7 10h6M10 7v6" />
+              </svg>
+            </button>
+          </div>
           <div class="where">
             <strong>{view === "input" ? `Input ${section ? "B" : "A"}` : view === "output" ? "Output" : "Device to Device"}</strong>
             <span>
               {view === "input" ? "From Device to Channel" : view === "output" ? "From Channel to Device" : "From Device to Device"}
             </span>
           </div>
-          <div class="spacer"></div>
-          <span class="hint">Click to toggle · drag diagonally to patch a range · click row names to select</span>
-          <button onclick={deleteSelected} disabled={!selected.size} title="Unpatch selected rows (Del)">Delete</button>
+          <svg class="direction" viewBox="0 0 32 32" aria-hidden="true">
+            {#if view === "input"}
+              <path d="M27 4v12a4 4 0 0 1-4 4H6M11 15l-5 5 5 5" />
+            {:else}
+              <path d="M5 28V16a4 4 0 0 1 4-4h17M21 7l5 5-5 5" />
+            {/if}
+          </svg>
         </div>
+      {/snippet}
+      <div class="panel gridpanel">
         {#if grid}
           <div class="gridwrap">
             <PatchGrid
@@ -274,9 +290,11 @@
               bind:hover
               onpatch={apply}
               ontap={(cluster, index, tap) => run(() => api.setTap(cluster, index, tap))}
+              corner={tools}
             />
           </div>
         {:else}
+          {@render tools()}
           <div class="empty">No device with channels for this view.</div>
         {/if}
       </div>
@@ -471,22 +489,51 @@
     border-left-color: #2bd17e;
   }
   .gridpanel {
-    display: grid;
-    grid-template-rows: auto 1fr;
+    display: flex;
+    flex-direction: column;
     min-height: 0;
     min-width: 0;
     padding: 8px;
-    gap: 8px;
   }
   .tools {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "zoom zoom" "where direction";
+    align-items: end;
+    row-gap: 4px;
+    padding: 4px 8px 6px;
+    line-height: 1.2;
+  }
+  .zoom {
+    grid-area: zoom;
     display: flex;
-    align-items: center;
     gap: 8px;
   }
+  .zoom button {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1.5px solid #8a8a8e;
+    border-radius: 7px;
+    background: transparent;
+  }
+  .zoom button:hover {
+    border-color: var(--text);
+  }
+  .zoomicon {
+    width: 24px;
+    height: 24px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
   .where {
+    grid-area: where;
     display: flex;
     flex-direction: column;
-    margin-left: 8px;
+    min-width: 0;
   }
   .where strong {
     font-size: 17px;
@@ -495,7 +542,18 @@
     font-size: 13px;
     color: var(--text-dim);
   }
+  .direction {
+    grid-area: direction;
+    width: 30px;
+    height: 30px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
   .gridwrap {
+    flex: 1;
     min-height: 0;
     min-width: 0;
   }
@@ -504,6 +562,7 @@
     color: var(--text-dim);
   }
   .empty {
+    flex: 1;
     display: grid;
     place-items: center;
     color: var(--text-dim);

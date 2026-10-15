@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import { cellOp, diagonal, type Grid } from "./grid";
   import { TAP_LABELS, type PatchOp } from "./types";
 
@@ -9,6 +10,7 @@
     hover = $bindable(null),
     onpatch,
     ontap,
+    corner,
   }: {
     grid: Grid;
     cell: number;
@@ -16,6 +18,8 @@
     hover?: { r: number; c: number } | null;
     onpatch: (ops: PatchOp[]) => void;
     ontap: (cluster: number, index: number, tap: number) => void;
+    /** Rendered in the empty top-left corner above the row titles. */
+    corner?: Snippet;
   } = $props();
 
   const hasTaps = $derived(grid.rows.some((row) => row.heading === undefined && row.tap));
@@ -103,9 +107,12 @@
 >
   <div class="canvas">
     <div class="corner">
-      <span class="corner-title">{grid.rowTitle}</span>
-      {#if hasTaps}<span class="tapcol">Source</span>{/if}
-      <span class="ms">{grid.rowTitle === "Channel Name" ? "M>S" : ""}</span>
+      {@render corner?.()}
+      <div class="corner-titles">
+        <span class="corner-title">{grid.rowTitle}</span>
+        {#if hasTaps}<span class="tapcol">Source</span>{/if}
+        <span class="ms">{grid.rowTitle === "Channel Name" ? "M>S" : ""}</span>
+      </div>
     </div>
 
     <div class="colhead">
@@ -233,6 +240,11 @@
     left: 0;
     z-index: 3;
     background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+  .corner-titles {
     display: flex;
     align-items: flex-end;
     padding: 0 0 8px 40px;
