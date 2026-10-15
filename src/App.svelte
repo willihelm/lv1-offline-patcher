@@ -4,7 +4,7 @@
   import * as api from "./lib/api";
   import PatchGrid from "./lib/PatchGrid.svelte";
   import { clearRowsOps, deviceGrid, inputGrid, outputGrid, type OutputTab, type PatchView } from "./lib/grid";
-  import type { Device, PatchOp, ShowState } from "./lib/types";
+  import { CLUSTER, DRIVER_CHANNELS, type Device, type PatchOp, type ShowState } from "./lib/types";
 
   let show = $state<ShowState | null>(null);
   let view = $state<PatchView>("input");
@@ -113,6 +113,19 @@
 
   const apply = (ops: PatchOp[]) => run(() => api.patch(ops));
 
+  function setDriverChannels(d: Device, count: number) {
+    const lost = show!.routes.filter(
+      (r) =>
+        (r.src.cluster === CLUSTER.HW_IN && r.src.index === d.idx && r.src.channel >= count) ||
+        (r.dst.cluster === CLUSTER.HW_OUT && r.dst.index === d.idx && r.dst.channel >= count),
+    ).length;
+    run(async () => {
+      const s = await api.setDriverChannels(d.idx, count);
+      message = `${d.name}: ${count} driver channels` + (lost ? `, ${lost} patch${lost > 1 ? "es" : ""} removed` : "");
+      return s;
+    });
+  }
+
   function deleteSelected() {
     if (!grid || !selected.size) return;
     const ops = clearRowsOps(grid, selected);
@@ -168,13 +181,29 @@
       </div>
       <div class="panel devices">
         {#each colDevices as d (d.idx)}
-          <button class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx} onclick={() => (devIdx = d.idx)}>
-            <div class="dhead">{deviceNo(d)} {d.name}</div>
-            <div class="dbody">
-              <span class="kind">{d.isDaw ? "DAW" : d.kind}</span>
-              <span class="io">{view === "input" ? d.inPorts.length + " in" : d.outPorts.length + " out"}</span>
-            </div>
-          </button>
+          <div class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx}>
+            <button class="dsel" onclick={() => (devIdx = d.idx)}>
+              <div class="dhead">{deviceNo(d)} {d.name}</div>
+              <div class="dbody">
+                <span class="kind">{d.isDaw ? "DAW" : d.kind}</span>
+                {#if !d.isDaw}
+                  <span class="io">{view === "input" ? d.inPorts.length + " in" : d.outPorts.length + " out"}</span>
+                {/if}
+              </div>
+            </button>
+            {#if d.isDaw}
+              <select
+                class="driver"
+                title="Driver Channels (removes patches on channels that no longer exist)"
+                value={d.ins === d.outs ? d.ins : ""}
+                disabled={busy}
+                onchange={(e) => setDriverChannels(d, +e.currentTarget.value)}
+              >
+                {#if d.ins !== d.outs}<option value="" disabled>{d.ins} in / {d.outs} out</option>{/if}
+                {#each DRIVER_CHANNELS as n}<option value={n}>{n} ch</option>{/each}
+              </select>
+            {/if}
+          </div>
         {/each}
       </div>
     </section>
@@ -319,17 +348,39 @@
   }
   .device {
     flex: none;
+    display: flex;
+    flex-direction: column;
     width: 112px;
-    padding: 0;
     overflow: hidden;
     background: #111;
     border: 2px solid transparent;
-    text-align: left;
+    border-radius: 6px;
   }
   .device.active {
-    background: #111;
-    color: var(--text);
     border-color: var(--accent);
+  }
+  .dsel {
+    flex: 1;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--text);
+    text-align: left;
+  }
+  .driver {
+    margin: 0 6px 6px;
+    padding: 2px 4px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    text-align: center;
+    text-align-last: center;
+    color: var(--text);
+    background: #262628;
+    border: 1px solid #555;
+    border-radius: 4px;
+    cursor: pointer;
   }
   .dhead {
     background: #3d8bfd;

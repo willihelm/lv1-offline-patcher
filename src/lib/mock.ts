@@ -53,6 +53,19 @@ export async function invoke<T>(cmd: string, args: Record<string, any>): Promise
       if (s) s.tap = args.tap;
       break;
     }
+    case "set_driver_channels": {
+      const d = show!.devices.find((x) => x.idx === args.idx);
+      if (!d) break;
+      const n: number = args.count;
+      const ports = Array.from({ length: n }, (_, c) => ({ channel: c, major: "DAW", minor: "SoundGrid", label: `${c + 1}` }));
+      Object.assign(d, { ins: n, outs: n, inPorts: ports, outPorts: ports });
+      show!.routes = show!.routes.filter(
+        (r) =>
+          !(r.src.cluster === 10 && r.src.index === d.idx && r.src.channel >= n) &&
+          !(r.dst.cluster === 11 && r.dst.index === d.idx && r.dst.channel >= n),
+      );
+      break;
+    }
     case "save":
       undoStack = [];
       redoStack = [];

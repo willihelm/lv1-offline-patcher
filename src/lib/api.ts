@@ -12,5 +12,7 @@ export const undo = () => call<ShowState>("undo");
 export const redo = () => call<ShowState>("redo");
 export const setTap = (cluster: number, index: number, tap: number) =>
   call<ShowState>("set_tap", { cluster, index, tap });
+export const setDriverChannels = (idx: number, count: number) =>
+  call<ShowState>("set_driver_channels", { idx, count });
 export const save = (path: string | null, force: boolean) =>
   call<{ show: ShowState; backup: string | null }>("save", { path, force });

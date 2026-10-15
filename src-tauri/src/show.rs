@@ -16,6 +16,8 @@ use crate::layout::{self, Port};
 // cluster_type ids (see table cluster_type)
 pub const INPUT: i64 = 0;
 pub const TALKBACK: i64 = 8;
+pub const HW_IN: i64 = 10;
+pub const HW_OUT: i64 = 11;
 /// Clusters that can feed a hardware output (direct outs and busses).
 const SOURCE_CLUSTERS: [i64; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
 /// snapshot_chainer_params.param_id of PARAM_COLOR_VALUE
@@ -26,6 +28,8 @@ pub const TAP_INP: i64 = 0;
 const TAP_PRE: i64 = 1;
 const TAP_PST: i64 = 2;
 const TAP_PSP: i64 = 3;
+/// Driver channel counts LV1 offers for a DAW (SoundGrid driver).
+pub const DRIVER_CHANNELS: [i64; 8] = [4, 8, 16, 32, 48, 64, 96, 128];
 /// The snapshot holding the live mixer state ("Active").
 const ACTIVE_SNAPSHOT: i64 = -1;
 
@@ -47,6 +51,22 @@ pub struct Device {
     pub outs: i64,
     pub in_ports: Vec<Port>,
     pub out_ports: Vec<Port>,
+    #[serde(skip)]
+    db_id: i64,
+    #[serde(skip)]
+    model: String,
+}
+
+impl Device {
+    fn with_channels(&self, ins: i64, outs: i64) -> Device {
+        Device {
+            ins,
+            outs,
+            in_ports: layout::ports(&self.model, self.is_daw, layout::Dir::In, ins),
+            out_ports: layout::ports(&self.model, self.is_daw, layout::Dir::Out, outs),
+            ..self.clone()
+        }
+    }
 }
 
 /// A mixer object (input channel, bus, ...) with its mono/stereo width.
@@ -130,7 +150,7 @@ pub struct PatchOp {
 pub struct ShowView<'a> {
     pub path: String,
     pub snapshot: String,
-    pub devices: &'a [Device],
+    pub devices: Vec<Device>,
     pub inputs: &'a [Strip],
     pub sources: Vec<Strip>,
     pub routes: &'a [Route],
@@ -146,6 +166,8 @@ struct Edits {
     routes: Vec<Route>,
     /// current tap per (cluster, index) of the output sources
     taps: HashMap<(i64, i64), i64>,
+    /// driver channel count (in and out) per DAW device idx, only where changed
+    driver_channels: HashMap<i64, i64>,
 }
 
 pub struct Show {
@@ -209,7 +231,7 @@ impl Show {
             inputs,
             sources,
             original_ids: routes.iter().filter_map(|r| r.id).collect(),
-            edits: Edits { routes, taps },
+            edits: Edits { routes, taps, driver_channels: HashMap::new() },
             undo: Vec::new(),
             redo: Vec::new(),
         })
@@ -227,7 +249,7 @@ impl Show {
         ShowView {
             path: self.path.display().to_string(),
             snapshot: self.snapshot.clone(),
-            devices: &self.devices,
+            devices: self.devices.iter().map(|d| self.device(d)).collect(),
             inputs: &self.inputs,
             sources,
             routes: &self.edits.routes,
@@ -236,6 +258,22 @@ impl Show {
             can_redo: !self.redo.is_empty(),
             lv1_open: wal_in_use(&self.path),
         }
+    }
+
+    /// The device with the edited driver channel count applied.
+    fn device(&self, d: &Device) -> Device {
+        match self.edits.driver_channels.get(&d.idx) {
+            Some(&n) => d.with_channels(n, n),
+            None => d.clone(),
+        }
+    }
+
+    /// DAW devices whose driver channel count differs from the file.
+    fn changed_drivers(&self) -> impl Iterator<Item = (&Device, i64)> {
+        self.devices.iter().filter_map(|d| {
+            let n = *self.edits.driver_channels.get(&d.idx)?;
+            (n != d.ins || n != d.outs).then_some((d, n))
+        })
     }
 
     fn tap(&self, s: &Strip) -> i64 {
@@ -255,6 +293,7 @@ impl Show {
         routes.iter().any(|r| r.id.is_none())
             || routes.len() != self.original_ids.len()
             || self.changed_taps().next().is_some()
+            || self.changed_drivers().next().is_some()
     }
 
     fn checkpoint(&mut self) {
@@ -291,6 +330,32 @@ impl Show {
             self.checkpoint();
             self.edits.taps.insert((cluster, index), tap);
         }
+        Ok(())
+    }
+
+    /// Set the number of driver channels (inputs and outputs) of a DAW. Patches on channels
+    /// that no longer exist are removed in the same undo step.
+    pub fn set_driver_channels(&mut self, idx: i64, count: i64) -> Result<()> {
+        if !DRIVER_CHANNELS.contains(&count) {
+            return Err(format!("Invalid driver channel count {count}"));
+        }
+        let Some(dev) = self.devices.iter().find(|d| d.idx == idx) else {
+            return Err(format!("Unknown device {idx}"));
+        };
+        if !dev.is_daw {
+            return Err(format!("{} is not a DAW", dev.name));
+        }
+        let cur = self.device(dev);
+        if cur.ins == count && cur.outs == count {
+            return Ok(());
+        }
+        self.checkpoint();
+        self.edits.driver_channels.insert(idx, count);
+        self.edits.routes.retain(|r| {
+            let gone_src = r.src.cluster == HW_IN && r.src.index == idx && r.src.channel >= count;
+            let gone_dst = r.dst.cluster == HW_OUT && r.dst.index == idx && r.dst.channel >= count;
+            !gone_src && !gone_dst
+        });
         Ok(())
     }
 
@@ -361,6 +426,31 @@ impl Show {
             )
             .map_err(err)?;
         }
+        // LV1 keeps the driver channel count per DAW in the device row and per bank/slot in
+        // default_driver_channel_counts (missing in older files)
+        let has_defaults: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'default_driver_channel_counts')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        for (dev, n) in self.changed_drivers() {
+            tx.execute(
+                "UPDATE device SET in_channel_count = ?1, out_channel_count = ?1 WHERE id = ?2",
+                params![n, dev.db_id],
+            )
+            .map_err(err)?;
+            if has_defaults {
+                tx.execute(
+                    "INSERT INTO default_driver_channel_counts (io_bank, io_slot, in_channel_count, out_channel_count)
+                     VALUES (?1, ?2, ?3, ?3)
+                     ON CONFLICT (io_bank, io_slot) DO UPDATE SET in_channel_count = ?3, out_channel_count = ?3",
+                    params![dev.idx / 8, dev.idx % 8, n],
+                )
+                .map_err(err)?;
+            }
+        }
         tx.commit().map_err(err)?;
         // the file runs in WAL mode: fold the changes back into the .emo itself
         db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).map_err(err)?;
@@ -397,7 +487,7 @@ fn load_devices(db: &Connection) -> rusqlite::Result<Vec<Device>> {
     }
     let mut stmt = db.prepare(
         "SELECT device_gender, io_bank, assign, description, mac, in_channel_count,
-                out_channel_count, max_in_channel_count, max_out_channel_count
+                out_channel_count, max_in_channel_count, max_out_channel_count, id
          FROM device WHERE io_bank >= 0 ORDER BY io_bank, assign",
     )?;
     let devices = stmt
@@ -421,6 +511,8 @@ fn load_devices(db: &Connection) -> rusqlite::Result<Vec<Device>> {
                 outs,
                 in_ports: layout::ports(&model, is_daw, layout::Dir::In, ins),
                 out_ports: layout::ports(&model, is_daw, layout::Dir::Out, outs),
+                db_id: r.get(9)?,
+                model,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -507,9 +599,6 @@ fn load_routes(db: &Connection) -> rusqlite::Result<Vec<Route>> {
 mod tests {
     use super::*;
 
-    const HW_IN: i64 = 10;
-
-
     /// Runs against a temporary copy of ../Main.emo if it exists.
     fn sample() -> Option<PathBuf> {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../Main.emo");
@@ -577,6 +666,47 @@ mod tests {
         let reread = Show::open(&path).unwrap();
         assert_eq!(src(&reread, 17).tap, Some(TAP_INP));
         assert!(!reread.dirty());
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn driver_channels() {
+        let Some(path) = sample() else { return };
+        let mut show = Show::open(&path).unwrap();
+        let dev = |show: &Show, name: &str| show.view().devices.into_iter().find(|d| d.name == name).unwrap();
+        let aux = dev(&show, "Audio Aux PC");
+        assert_eq!((aux.is_daw, aux.ins, aux.outs), (true, 128, 128));
+        let idx = aux.idx;
+        // a patch on a channel that disappears when shrinking
+        let dst = Dst { cluster: INPUT, index: 40, section: 0, channel: 0 };
+        show.apply(&[PatchOp { dst, src: Some(Src { cluster: HW_IN, index: idx, channel: 100 }) }]);
+
+        assert!(show.set_driver_channels(idx, 33).is_err());
+        assert!(show.set_driver_channels(0, 32).is_err()); // IOS-XL is no DAW
+        show.set_driver_channels(idx, 32).unwrap();
+        let aux = dev(&show, "Audio Aux PC");
+        assert_eq!((aux.ins, aux.outs, aux.in_ports.len()), (32, 32, 32));
+        assert!(!show.edits.routes.iter().any(|r| r.dst == dst));
+        show.undo();
+        assert!(show.edits.routes.iter().any(|r| r.dst == dst));
+        assert_eq!(dev(&show, "Audio Aux PC").ins, 128);
+        show.redo();
+
+        show.save(&path, false).unwrap();
+        let reread = Show::open(&path).unwrap();
+        assert_eq!(dev(&reread, "Audio Aux PC").outs, 32);
+        assert!(!reread.dirty());
+        let db = Connection::open(&path).unwrap();
+        let defaults: (i64, i64) = db
+            .query_row(
+                "SELECT in_channel_count, out_channel_count FROM default_driver_channel_counts
+                 WHERE io_bank = ?1 AND io_slot = ?2",
+                [idx / 8, idx % 8],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(defaults, (32, 32));
+        drop(db);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

@@ -28,6 +28,9 @@ export interface Strip {
   tap: number | null;
 }
 
+/** driver channel counts LV1 offers for a DAW */
+export const DRIVER_CHANNELS = [4, 8, 16, 32, 48, 64, 96, 128];
+
 export const TAP_LABELS = ["INP", "PRE", "PST", "PSP"];
 
 export interface Src {

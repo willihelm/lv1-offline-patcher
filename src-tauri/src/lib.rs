@@ -76,6 +76,15 @@ fn set_tap(state: State<AppState>, cluster: i64, index: i64, tap: i64) -> CmdRes
     })
 }
 
+/// Set the number of driver channels (inputs and outputs) of a DAW device.
+#[tauri::command]
+fn set_driver_channels(state: State<AppState>, idx: i64, count: i64) -> CmdResult<serde_json::Value> {
+    with_show(&state, |s| {
+        s.set_driver_channels(idx, count)?;
+        view(s)
+    })
+}
+
 /// Save into the opened file (with backup), or into `path` as a patched copy.
 #[tauri::command]
 fn save(state: State<AppState>, path: Option<String>, force: bool) -> CmdResult<SaveResult> {
@@ -91,7 +100,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![open_show, get_show, patch, undo, redo, set_tap, save])
+        .invoke_handler(tauri::generate_handler![open_show, get_show, patch, undo, redo, set_tap, set_driver_channels, save])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
