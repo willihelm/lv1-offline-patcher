@@ -148,7 +148,10 @@
             <span class="swatch" style:background={row.color}>{row.number}</span>
             <span class="name">{row.label}</span>
             {#if row.kind}<span class="kind">{row.kind}</span>{/if}
-            {#if row.note}<span class="note" title="Patched from {row.note}">{row.note}</span>{/if}
+            {#if row.note}
+              {@const [, head, tail] = row.note.match(/^(.*?)(\s*\S+)$/) ?? ["", row.note, ""]}
+              <span class="note" title="Patched from {row.note}"><span class="note-head">{head}</span><span class="note-tail">{tail}</span></span>
+            {/if}
             {#if row.tap}
               {@const tap = row.tap}
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
@@ -353,13 +356,20 @@
     color: var(--text-dim);
   }
   .note {
+    display: flex;
+    min-width: 0;
     font-size: 11px;
     color: #f5a623;
     max-width: 110px;
-    white-space: nowrap;
+    white-space: pre;
+    padding: 0 6px;
+  }
+  .note-head {
     overflow: hidden;
     text-overflow: ellipsis;
-    padding: 0 6px;
+  }
+  .note-tail {
+    flex: none;
   }
   .corner-title {
     flex: 1;

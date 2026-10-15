@@ -1,10 +1,14 @@
-// Approximation of the LV1 channel color palette (PARAM_COLOR_VALUE index).
+// LV1 channel color palette (PARAM_COLOR_VALUE index), row-major as shown in LV1's color picker.
 const PALETTE = [
-  "#e53935", "#f4511e", "#fb8c00", "#fdd835", "#c0ca33", "#7cb342", "#43a047", "#00897b",
-  "#00acc1", "#3cc4f0", "#1e88e5", "#3949ab", "#5e35b1", "#8e24aa", "#d81b60", "#ec407a",
-  "#8d6e63", "#9e9e9e", "#607d8b", "#ffb74d", "#aed581", "#4db6ac", "#f58220", "#ba68c8",
-  "#f06292", "#ffd54f", "#81c784", "#64b5f6", "#9575cd", "#e57373", "#ff8a65", "#a1887f",
+  "#189ca4", "#008fff", "#31a300", "#00945f",
+  "#6ec7c9", "#4e7386", "#ffb400", "#ff0073",
+  "#0066ff", "#00d0ff", "#00feff", "#006e8a",
+  "#74a7da", "#00a8af", "#00ee52", "#00ffac",
+  "#a048cd", "#ff8e95", "#effa00", "#ff003a",
+  "#e7e7e7", "#c40000", "#00ff00", "#a0a0a0",
+  "#ff6500", "#ff00ff", "#e58ce2", "#ff4192",
+  "#877600", "#a4667e", "#bc2c88", "#8d46ff",
 ];
-const DEFAULT = "#1a9aa6";
+const DEFAULT = PALETTE[0];
 
 export const stripColor = (c: number | null) => (c == null ? DEFAULT : (PALETTE[c] ?? DEFAULT));
