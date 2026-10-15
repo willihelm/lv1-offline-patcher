@@ -1,0 +1,13 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+*.bak-*
+public/demo.json
+.playwright-mcp/
+.DS_Store
+# Show files (35 MB each, local test data)
+*.emo
+*.db
+*.emo-wal
+*.emo-shm

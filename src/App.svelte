@@ -1,0 +1,446 @@
+<script lang="ts">
+  import { isTauri } from "@tauri-apps/api/core";
+  import { ask, open, save as saveDialog } from "@tauri-apps/plugin-dialog";
+  import * as api from "./lib/api";
+  import PatchGrid from "./lib/PatchGrid.svelte";
+  import { clearRowsOps, deviceGrid, inputGrid, outputGrid, type OutputTab, type PatchView } from "./lib/grid";
+  import type { Device, PatchOp, ShowState } from "./lib/types";
+
+  let show = $state<ShowState | null>(null);
+  let view = $state<PatchView>("input");
+  let section = $state(0);
+  let outputTab = $state<OutputTab>("direct");
+  let devIdx = $state(-1);
+  let srcDevIdx = $state(-1);
+  let cell = $state(32);
+  let selected = $state(new Set<number>());
+  let hover = $state<{ r: number; c: number } | null>(null);
+  let message = $state("");
+  let busy = $state(false);
+
+  const views: [PatchView, string][] = [
+    ["input", "Input"],
+    ["output", "Output"],
+    ["d2d", "Device to\nDevice"],
+  ];
+
+  // devices that have channels in the direction the column side of the matrix needs
+  const colDevices = $derived(show?.devices.filter((d) => (view === "input" ? d.ins : d.outs) > 0) ?? []);
+  const rowDevices = $derived(show?.devices.filter((d) => d.ins > 0) ?? []);
+  const device = $derived(colDevices.find((d) => d.idx === devIdx) ?? colDevices[0]);
+  const srcDevice = $derived(rowDevices.find((d) => d.idx === srcDevIdx) ?? rowDevices[0]);
+
+  const grid = $derived.by(() => {
+    if (!show || !device) return null;
+    if (view === "input") return inputGrid(show, device, section);
+    if (view === "output") return outputGrid(show, device, outputTab);
+    return srcDevice ? deviceGrid(show, srcDevice, device) : null;
+  });
+
+  const fileName = $derived(show?.path.split(/[\\/]/).pop() ?? "");
+  const status = $derived.by(() => {
+    if (!grid || !hover || !device) return "";
+    const row = grid.rows[hover.r];
+    const col = grid.cols[hover.c];
+    if (!row || !col || row.heading !== undefined) return "";
+    const rowText = `${row.number}  ${row.label} ${row.side}`.trim();
+    const port = [device.name, col.port.minor, col.port.label].filter(Boolean).join(" ");
+    if (view === "input") return `${port}  →  ${rowText}${section ? "  (Input B)" : ""}`;
+    return `${rowText}  →  ${port}${col.note ? `   (currently: ${col.note})` : ""}`;
+  });
+
+  // a new matrix starts with an empty row selection
+  $effect(() => {
+    void view, section, outputTab, device?.idx, srcDevice?.idx;
+    selected = new Set();
+  });
+
+  async function run(task: () => Promise<ShowState | void>) {
+    busy = true;
+    try {
+      const s = await task();
+      if (s) show = s;
+    } catch (e) {
+      message = `Error: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function openFile() {
+    let path: string | null = "demo";
+    if (isTauri()) {
+      path = await open({ filters: [{ name: "LV1 Showfile", extensions: ["emo"] }] });
+    }
+    if (!path) return;
+    await run(async () => {
+      const s = await api.openShow(path);
+      message = s.lv1Open
+        ? "Warning: this show seems to be open in LV1. Close it there before saving."
+        : `Opened ${path}`;
+      return s;
+    });
+  }
+
+  async function saveFile(saveAs: boolean) {
+    if (!show) return;
+    let target: string | null = null;
+    if (saveAs) {
+      if (!isTauri()) return;
+      target = await saveDialog({
+        defaultPath: show.path.replace(/\.emo$/i, "-patched.emo"),
+        filters: [{ name: "LV1 Showfile", extensions: ["emo"] }],
+      });
+      if (!target) return;
+    }
+    await run(async () => {
+      let res;
+      try {
+        res = await api.save(target, false);
+      } catch (e) {
+        if (e !== "LV1_OPEN") throw e;
+        const ok = await ask(
+          "The showfile has an active -wal file, LV1 probably has it open. Writing now can corrupt the show or be overwritten by LV1.\n\nWrite anyway?",
+          { title: "LV1 is running", kind: "warning" },
+        );
+        if (!ok) return;
+        res = await api.save(target, true);
+      }
+      message = res.backup ? `Saved. Backup: ${res.backup}` : `Saved ${target ?? show!.path}`;
+      return res.show;
+    });
+  }
+
+  const apply = (ops: PatchOp[]) => run(() => api.patch(ops));
+
+  function deleteSelected() {
+    if (!grid || !selected.size) return;
+    const ops = clearRowsOps(grid, selected);
+    if (ops.length) apply(ops);
+  }
+
+  function keydown(e: KeyboardEvent) {
+    const mod = e.metaKey || e.ctrlKey;
+    const k = e.key.toLowerCase();
+    if (mod && k === "o") openFile();
+    else if (mod && k === "s") saveFile(e.shiftKey);
+    else if (mod && k === "z" && show) run(e.shiftKey ? api.redo : api.undo);
+    else if (mod && k === "y" && show) run(api.redo);
+    else if ((e.key === "Delete" || e.key === "Backspace") && !mod) deleteSelected();
+    else return;
+    e.preventDefault();
+  }
+
+  const deviceNo = (d: Device) => `${d.idx + 1}.`;
+</script>
+
+<svelte:window onkeydown={keydown} />
+
+<main>
+  <header class="topbar">
+    <div class="brand">LV1 <span>Offline Patcher</span></div>
+    <button onclick={openFile} disabled={busy}>Open…</button>
+    {#if show}
+      <div class="file" title={show.path}>
+        <strong>{fileName}{show.dirty ? "*" : ""}</strong>
+        <span>{show.snapshot}</span>
+      </div>
+      <button onclick={() => run(api.undo)} disabled={!show.canUndo || busy} title="Undo (⌘Z)">Undo</button>
+      <button onclick={() => run(api.redo)} disabled={!show.canRedo || busy} title="Redo (⇧⌘Z)">Redo</button>
+      <div class="spacer"></div>
+      {#if show.lv1Open}<span class="warn">LV1 has this file open</span>{/if}
+      <button class="primary" onclick={() => saveFile(false)} disabled={!show.dirty || busy} title="Save (⌘S)">
+        Save
+      </button>
+      <button onclick={() => saveFile(true)} disabled={busy} title="Save patched copy (⇧⌘S)">Save As…</button>
+    {/if}
+  </header>
+
+  {#if show}
+    <section class="selectors">
+      <div class="panel views">
+        <div class="caption">Select Patch View</div>
+        <div class="row">
+          {#each views as [v, label]}
+            <button class="big" class:active={view === v} onclick={() => (view = v)}>{label}</button>
+          {/each}
+        </div>
+      </div>
+      <div class="panel devices">
+        {#each colDevices as d (d.idx)}
+          <button class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx} onclick={() => (devIdx = d.idx)}>
+            <div class="dhead">{deviceNo(d)} {d.name}</div>
+            <div class="dbody">
+              <span class="kind">{d.isDaw ? "DAW" : d.kind}</span>
+              <span class="io">{view === "input" ? d.inPorts.length + " in" : d.outPorts.length + " out"}</span>
+            </div>
+          </button>
+        {/each}
+      </div>
+    </section>
+
+    <section class="work">
+      <aside class="panel side">
+        {#if view === "input"}
+          <button class="big" class:active={section === 0} onclick={() => (section = 0)}>Input A</button>
+          <button class="big" class:active={section === 1} onclick={() => (section = 1)}>Input B</button>
+        {:else if view === "d2d"}
+          <div class="caption small">From</div>
+          {#each rowDevices as d (d.idx)}
+            <button class="srcdev" class:daw={d.isDaw} class:active={d.idx === srcDevice?.idx} onclick={() => (srcDevIdx = d.idx)}>
+              {deviceNo(d)} {d.name}
+            </button>
+          {/each}
+        {:else}
+          <button class="big" class:active={outputTab === "direct"} onclick={() => (outputTab = "direct")}>Direct</button>
+          <button class="big" class:active={outputTab === "busses"} onclick={() => (outputTab = "busses")}>
+            Mix{"\n"}Busses
+          </button>
+        {/if}
+      </aside>
+
+      <div class="panel gridpanel">
+        <div class="tools">
+          <button class="icon" onclick={() => (cell = Math.max(18, cell - 4))} title="Zoom out">−</button>
+          <button class="icon" onclick={() => (cell = Math.min(48, cell + 4))} title="Zoom in">+</button>
+          <div class="where">
+            <strong>{view === "input" ? `Input ${section ? "B" : "A"}` : view === "output" ? "Output" : "Device to Device"}</strong>
+            <span>
+              {view === "input" ? "From Device to Channel" : view === "output" ? "From Channel to Device" : "From Device to Device"}
+            </span>
+          </div>
+          <div class="spacer"></div>
+          <span class="hint">Click to toggle · drag diagonally to patch a range · click row names to select</span>
+          <button onclick={deleteSelected} disabled={!selected.size} title="Unpatch selected rows (Del)">Delete</button>
+        </div>
+        {#if grid}
+          <div class="gridwrap">
+            <PatchGrid
+              {grid}
+              {cell}
+              bind:selected
+              bind:hover
+              onpatch={apply}
+              ontap={(cluster, index, tap) => run(() => api.setTap(cluster, index, tap))}
+            />
+          </div>
+        {:else}
+          <div class="empty">No device with channels for this view.</div>
+        {/if}
+      </div>
+    </section>
+  {:else}
+    <section class="welcome">
+      <h1>LV1 Offline Patcher</h1>
+      <p>Open a Waves LV1 showfile (<code>.emo</code>) to edit its input, output and device-to-device patch without the hardware being online.</p>
+      <p class="hint">LV1 must not have the show open while saving. A backup (<code>.bak-&lt;timestamp&gt;</code>) is written before every save.</p>
+      <button class="primary big" onclick={openFile}>Open Showfile…</button>
+    </section>
+  {/if}
+
+  <footer class="statusbar">
+    <span>{status || message}</span>
+    {#if grid}<span class="count">{grid.patched.size} patched in view</span>{/if}
+  </footer>
+</main>
+
+<style>
+  main {
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    height: 100vh;
+    gap: 8px;
+    padding: 8px;
+    box-sizing: border-box;
+  }
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .brand {
+    font-weight: 800;
+    font-size: 18px;
+    margin-right: 8px;
+  }
+  .brand span {
+    font-weight: 400;
+    color: var(--text-dim);
+  }
+  .file {
+    display: flex;
+    flex-direction: column;
+    background: #111;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 3px 12px;
+    font-size: 12px;
+    min-width: 160px;
+  }
+  .file span {
+    color: var(--text-dim);
+  }
+  .spacer {
+    flex: 1;
+  }
+  .warn {
+    color: #ff5252;
+    font-weight: 700;
+  }
+  .selectors {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px;
+    min-width: 0;
+  }
+  .views {
+    padding: 8px 10px;
+  }
+  .caption {
+    text-align: center;
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .caption.small {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .views .row {
+    display: flex;
+    gap: 8px;
+  }
+  .devices {
+    display: flex;
+    gap: 10px;
+    padding: 10px;
+    overflow-x: auto;
+    align-items: center;
+  }
+  .device {
+    flex: none;
+    width: 112px;
+    padding: 0;
+    overflow: hidden;
+    background: #111;
+    border: 2px solid transparent;
+    text-align: left;
+  }
+  .device.active {
+    background: #111;
+    color: var(--text);
+    border-color: var(--accent);
+  }
+  .dhead {
+    background: #3d8bfd;
+    color: #000;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .device.daw .dhead {
+    background: #2bd17e;
+  }
+  .dbody {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 4px;
+    gap: 2px;
+  }
+  .kind {
+    font-weight: 800;
+    font-size: 15px;
+  }
+  .io {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .work {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 8px;
+    min-height: 0;
+  }
+  .side {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 8px;
+    overflow-y: auto;
+  }
+  .srcdev {
+    text-align: left;
+    font-size: 12px;
+    border-left: 4px solid #3d8bfd;
+  }
+  .srcdev.active {
+    border-left-width: 4px;
+  }
+  .srcdev.daw {
+    border-left-color: #2bd17e;
+  }
+  .gridpanel {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    min-height: 0;
+    min-width: 0;
+    padding: 8px;
+    gap: 8px;
+  }
+  .tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .where {
+    display: flex;
+    flex-direction: column;
+    margin-left: 8px;
+  }
+  .where strong {
+    font-size: 17px;
+  }
+  .where span {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .gridwrap {
+    min-height: 0;
+    min-width: 0;
+  }
+  .hint {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .empty {
+    display: grid;
+    place-items: center;
+    color: var(--text-dim);
+  }
+  .welcome {
+    grid-row: 2 / 4;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    text-align: center;
+    max-width: 640px;
+    margin: auto;
+  }
+  .welcome h1 {
+    margin: 0 0 8px;
+  }
+  .statusbar {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 0 4px;
+    min-height: 16px;
+  }
+</style>
