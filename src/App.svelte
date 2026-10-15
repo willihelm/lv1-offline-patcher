@@ -1,5 +1,6 @@
 <script lang="ts">
   import { isTauri } from "@tauri-apps/api/core";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { ask, open, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import * as api from "./lib/api";
   import PatchGrid from "./lib/PatchGrid.svelte";
@@ -17,6 +18,7 @@
   let hover = $state<{ r: number; c: number } | null>(null);
   let message = $state("");
   let busy = $state(false);
+  let dragging = $state(false);
 
   const views: [PatchView, string][] = [
     ["input", "Input"],
@@ -72,7 +74,10 @@
     if (isTauri()) {
       path = await open({ filters: [{ name: "LV1 Showfile", extensions: ["emo"] }] });
     }
-    if (!path) return;
+    if (path) await openPath(path);
+  }
+
+  async function openPath(path: string) {
     await run(async () => {
       const s = await api.openShow(path);
       message = s.lv1Open
@@ -110,6 +115,24 @@
       return res.show;
     });
   }
+
+  const isShowfile = (p: string) => /\.emo$/i.test(p);
+
+  // files dropped from Finder/Explorer only reach us through Tauri's native drag-drop event
+  $effect(() => {
+    if (!isTauri()) return;
+    const unlisten = getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (payload.type === "enter") dragging = payload.paths.some(isShowfile);
+      else if (payload.type === "leave") dragging = false;
+      else if (payload.type === "drop") {
+        dragging = false;
+        const path = payload.paths.find(isShowfile);
+        if (!path) message = "Drop a Waves LV1 showfile (.emo) to open it.";
+        else if (!busy) openPath(path);
+      }
+    });
+    return () => void unlisten.then((f) => f());
+  });
 
   const apply = (ops: PatchOp[]) => run(() => api.patch(ops));
 
@@ -182,7 +205,7 @@
       <div class="panel devices">
         {#each colDevices as d (d.idx)}
           <div class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx}>
-            <button class="dsel" onclick={() => (devIdx = d.idx)}>
+            <button class="dsel" title={d.name} onclick={() => (devIdx = d.idx)}>
               <div class="dhead">{deviceNo(d)} {d.name}</div>
               <div class="dbody">
                 <span class="kind">{d.isDaw ? "DAW" : d.kind}</span>
@@ -216,7 +239,7 @@
         {:else if view === "d2d"}
           <div class="caption small">From</div>
           {#each rowDevices as d (d.idx)}
-            <button class="srcdev" class:daw={d.isDaw} class:active={d.idx === srcDevice?.idx} onclick={() => (srcDevIdx = d.idx)}>
+            <button class="srcdev" class:daw={d.isDaw} class:active={d.idx === srcDevice?.idx} title={d.name} onclick={() => (srcDevIdx = d.idx)}>
               {deviceNo(d)} {d.name}
             </button>
           {/each}
@@ -264,7 +287,12 @@
       <p>Open a Waves LV1 showfile (<code>.emo</code>) to edit its input, output and device-to-device patch without the hardware being online.</p>
       <p class="hint">LV1 must not have the show open while saving. A backup (<code>.bak-&lt;timestamp&gt;</code>) is written before every save.</p>
       <button class="primary big" onclick={openFile}>Open Showfile…</button>
+      <p class="hint">…or drop it onto this window.</p>
     </section>
+  {/if}
+
+  {#if dragging}
+    <div class="dropzone"><div>Drop to open showfile</div></div>
   {/if}
 
   <footer class="statusbar">
@@ -344,7 +372,7 @@
     gap: 10px;
     padding: 10px;
     overflow-x: auto;
-    align-items: center;
+    align-items: stretch;
   }
   .device {
     flex: none;
@@ -367,6 +395,8 @@
     background: none;
     color: var(--text);
     text-align: left;
+    display: flex;
+    flex-direction: column;
   }
   .driver {
     margin: 0 6px 6px;
@@ -396,9 +426,11 @@
     background: #2bd17e;
   }
   .dbody {
+    flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
     padding: 8px 4px;
     gap: 2px;
   }
@@ -424,8 +456,12 @@
     overflow-y: auto;
   }
   .srcdev {
+    flex: none;
     text-align: left;
     font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     border-left: 4px solid #3d8bfd;
   }
   .srcdev.active {
@@ -485,6 +521,28 @@
   }
   .welcome h1 {
     margin: 0 0 8px;
+  }
+  .dropzone {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgb(0 0 0 / 0.6);
+    pointer-events: none;
+  }
+  .dropzone div {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    border: 3px dashed var(--accent);
+    border-radius: 12px;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
   }
   .statusbar {
     display: flex;
