@@ -2,6 +2,8 @@
 name = "lv1-offline-patcher"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "Edit the patch of a Waves LV1 showfile offline"
 
 [lib]
 name = "lv1_offline_patcher_lib"

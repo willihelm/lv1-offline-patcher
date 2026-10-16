@@ -19,11 +19,33 @@
         "minHeight": 500
       }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.png"]
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "publisher": "Wilhelm Dück",
+    "copyright": "Copyright (c) 2026 Wilhelm Dück",
+    "license": "MIT",
+    "category": "Music",
+    "shortDescription": "Edit the patch of a Waves LV1 showfile offline",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
   }
 }

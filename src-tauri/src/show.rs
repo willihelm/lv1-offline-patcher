@@ -377,7 +377,9 @@ impl Show {
         if wal_in_use(&self.path) && !force {
             return Err("LV1_OPEN".into());
         }
-        let same_file = target == self.path.as_path();
+        // canonicalize: on Windows the same file can be spelled with different case or separators
+        let same_file = target == self.path.as_path()
+            || matches!((fs::canonicalize(target), fs::canonicalize(&self.path)), (Ok(a), Ok(b)) if a == b);
         let backup = if same_file {
             Some(backup(&self.path)?)
         } else {

@@ -1,6 +1,6 @@
 # LV1 Offline Patcher
 
-Desktop app (Tauri 2 / Rust + Svelte 5) for editing the patch of a Waves LV1 showfile (`.emo`)
+Desktop app for macOS and Windows (Tauri 2 / Rust + Svelte 5) for editing the patch of a Waves LV1 showfile (`.emo`)
 without the I/O hardware being online. The UI follows LV1's Patch page:
 
 - **Input** (A/B): device inputs → channels (and Talkback)
@@ -9,8 +9,9 @@ without the I/O hardware being online. The UI follows LV1's Patch page:
 - **Device to Device**: device inputs → device outputs
 
 Click a cell to patch or unpatch it. Drag diagonally to patch a range; a drag that starts on a
-patched cell unpatches instead. Click row names to select them (shift for a range, ⌘ to toggle),
-then press **Delete**. ⌘Z / ⇧⌘Z undo and redo, ⌘S saves, ⇧⌘S saves a patched copy.
+patched cell unpatches instead. Click row names to select them (shift for a range, ⌘/Ctrl to
+toggle), then press **Delete**. ⌘Z / ⇧⌘Z undo and redo, ⌘S saves, ⇧⌘S saves a patched copy
+(on Windows: Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S).
 Orange text marks patches that come from outside the current matrix (another device or source).
 
 ## How it works
@@ -33,6 +34,14 @@ still open, and the app asks before writing anyway.
 
 Channel colors are an approximation of LV1's palette.
 
+## Download
+
+Installers for macOS (universal `.dmg`) and Windows (`-setup.exe` / `.msi`) are on the
+[Releases](https://github.com/willihelm/LV1OfflinePatcher/releases) page. The builds are not
+code-signed: on macOS right-click the app and choose **Open** the first time (or run
+`xattr -cr "/Applications/LV1 Offline Patcher.app"`); on Windows click **More info → Run anyway**
+in the SmartScreen dialog. Windows needs the WebView2 runtime, which the installer fetches if missing.
+
 ## Development
 
 ```sh
@@ -42,6 +51,13 @@ npm run tauri build        # release bundle in src-tauri/target/release/bundle
 cd src-tauri && cargo test # save round-trip on a temp copy of ../Main.emo
 ```
 
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds macOS and Windows installers
+and attaches them to a draft GitHub release.
+
 `npm run dev` also runs the UI in a plain browser with a mock backend. It loads
 `public/demo.json`, which you generate from `Main.emo` with
 `cd src-tauri && cargo test dump_demo -- --ignored`.
+
+## License
+
+[MIT](LICENSE). Not affiliated with or endorsed by Waves Audio.

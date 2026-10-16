@@ -167,6 +167,11 @@
     e.preventDefault();
   }
 
+  const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+  const keys = mac
+    ? { undo: "⌘Z", redo: "⇧⌘Z", save: "⌘S", saveAs: "⇧⌘S" }
+    : { undo: "Ctrl+Z", redo: "Ctrl+Y", save: "Ctrl+S", saveAs: "Ctrl+Shift+S" };
+
   const deviceNo = (d: Device) => `${d.idx + 1}.`;
 </script>
 
@@ -181,14 +186,14 @@
         <strong>{fileName}{show.dirty ? "*" : ""}</strong>
         <span>{show.snapshot}</span>
       </div>
-      <button onclick={() => run(api.undo)} disabled={!show.canUndo || busy} title="Undo (⌘Z)">Undo</button>
-      <button onclick={() => run(api.redo)} disabled={!show.canRedo || busy} title="Redo (⇧⌘Z)">Redo</button>
+      <button onclick={() => run(api.undo)} disabled={!show.canUndo || busy} title="Undo ({keys.undo})">Undo</button>
+      <button onclick={() => run(api.redo)} disabled={!show.canRedo || busy} title="Redo ({keys.redo})">Redo</button>
       <div class="spacer"></div>
       {#if show.lv1Open}<span class="warn">LV1 has this file open</span>{/if}
-      <button class="primary" onclick={() => saveFile(false)} disabled={!show.dirty || busy} title="Save (⌘S)">
+      <button class="primary" onclick={() => saveFile(false)} disabled={!show.dirty || busy} title="Save ({keys.save})">
         Save
       </button>
-      <button onclick={() => saveFile(true)} disabled={busy} title="Save patched copy (⇧⌘S)">Save As…</button>
+      <button onclick={() => saveFile(true)} disabled={busy} title="Save patched copy ({keys.saveAs})">Save As…</button>
     {/if}
   </header>
 
