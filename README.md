@@ -23,9 +23,8 @@ live state. Stored snapshots are not touched.
 
 The file only stores channel counts per device, so the port types (Analog Line, Phones, AES, ...)
 come from a table per device model in `src-tauri/src/layout.rs`. It covers the SoundGrid
-interfaces from Waves' compatibility chart (DiGiGrid, IONIC, StageGrid, MADI/Dante bridges, ...);
-only IOS-XL and IOX are verified against real showfiles, unknown models fall back to numbered AES. A mono channel with a
-mono-to-stereo plugin (plugin code ending in `X`, e.g. RVerb) has a stereo direct out unless its
+interfaces from Waves' compatibility chart (DiGiGrid, IONIC, StageGrid, MADI/Dante bridges, ...).
+A mono channel with a mono-to-stereo plugin (plugin code ending in `X`, e.g. RVerb) has a stereo direct out unless its
 source is INP.
 All file access happens in the Rust backend (`src-tauri/src/show.rs`). Edits stay in memory until
 you save. **Save** first writes a `<file>.bak-<timestamp>` backup, then applies the changes in one transaction and checkpoints the
