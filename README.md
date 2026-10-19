@@ -37,7 +37,7 @@ Channel colors are an approximation of LV1's palette.
 ## Download
 
 Installers for macOS (universal `.dmg`) and Windows (`-setup.exe` / `.msi`) are on the
-[Releases](https://github.com/willihelm/LV1OfflinePatcher/releases) page. The builds are not
+[Releases](https://github.com/willihelm/lv1-offline-patcher/releases) page. The builds are not
 code-signed: on macOS right-click the app and choose **Open** the first time (or run
 `xattr -cr "/Applications/LV1 Offline Patcher.app"`); on Windows click **More info → Run anyway**
 in the SmartScreen dialog. Windows needs the WebView2 runtime, which the installer fetches if missing.
