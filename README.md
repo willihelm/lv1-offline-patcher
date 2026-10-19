@@ -63,8 +63,12 @@ npm run tauri build        # release bundle in src-tauri/target/release/bundle
 cd src-tauri && cargo test # runs on temp copies of src-tauri/testdata/lv1-test-session.emo
 ```
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds macOS and Windows installers
-and attaches them to a draft GitHub release.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, ...).
+`npm run release` bumps the version in `package.json`, `tauri.conf.json` and `Cargo.toml`, adds the
+`feat`/`fix` commits since the last tag to `CHANGELOG.md`, commits and tags. `feat` bumps the minor
+version, `fix` the patch; use `npm run release -- --release-as 1.0.0` to choose one.
+`git push --follow-tags origin main` then runs `.github/workflows/release.yml`, which builds macOS and
+Windows installers and attaches them to a draft GitHub release.
 
 `npm run dev` also runs the UI in a plain browser with a mock backend. It loads
 `public/demo.json`, which you generate from the test session with
