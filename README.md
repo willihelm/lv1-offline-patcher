@@ -1,5 +1,7 @@
 # LV1 Offline Patcher
 
+![LV1 Offline Patcher: Input patch of an IOX with preamp gain and 48V](docs/screenshot.png)
+
 Desktop app for macOS and Windows (Tauri 2 / Rust + Svelte 5) for editing the patch of a Waves LV1 showfile (`.emo`)
 without the I/O hardware being online. The UI follows LV1's Patch page:
 
