@@ -48,15 +48,19 @@ in the SmartScreen dialog. Windows needs the WebView2 runtime, which the install
 npm install
 npm run tauri dev          # desktop app
 npm run tauri build        # release bundle in src-tauri/target/release/bundle
-cd src-tauri && cargo test # save round-trip on a temp copy of ../Main.emo
+cd src-tauri && cargo test # runs on temp copies of src-tauri/testdata/lv1-test-session.emo
 ```
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds macOS and Windows installers
 and attaches them to a draft GitHub release.
 
 `npm run dev` also runs the UI in a plain browser with a mock backend. It loads
-`public/demo.json`, which you generate from `Main.emo` with
+`public/demo.json`, which you generate from the test session with
 `cd src-tauri && cargo test dump_demo -- --ignored`.
+
+`src-tauri/testdata/lv1-test-session.emo` is an empty LV1 session with mock devices: a DAW
+(B0S0), an IOS-XL (B0S1), an IOX (B0S2) and a second DAW with 64 driver channels (B0S3), plus a
+few named channels and patches.
 
 ## License
 

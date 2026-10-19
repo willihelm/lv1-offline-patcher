@@ -11,4 +11,5 @@ public/demo.json
 *.db
 *.emo-wal
 *.emo-shm
+!src-tauri/testdata/lv1-test-session.emo
 release/

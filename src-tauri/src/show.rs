@@ -601,32 +601,55 @@ fn load_routes(db: &Connection) -> rusqlite::Result<Vec<Route>> {
 mod tests {
     use super::*;
 
-    /// Runs against a temporary copy of ../Main.emo if it exists.
-    fn sample() -> Option<PathBuf> {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../Main.emo");
-        if !src.exists() {
-            return None;
-        }
+    /// A temporary copy of testdata/lv1-test-session.emo: an empty LV1 session with mock
+    /// devices (B0S0 "Test DAW", B0S1 "Stage IOS-XL", B0S2 "Stage IOX", B0S3 "Record DAW"
+    /// with 64 driver channels), channels Kick/Snare/Vox and 8 patches.
+    fn sample() -> PathBuf {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/lv1-test-session.emo");
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("lv1-offline-patcher-test-{}-{n}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let dst = dir.join("Main.emo");
+        let dst = dir.join("session.emo");
         fs::copy(src, &dst).unwrap();
-        Some(dst)
+        dst
+    }
+
+    fn dev(show: &Show, name: &str) -> Device {
+        show.view().devices.into_iter().find(|d| d.name == name).unwrap()
+    }
+
+    #[test]
+    fn devices() {
+        let path = sample();
+        let show = Show::open(&path).unwrap();
+        let names: Vec<_> = show.devices.iter().map(|d| (d.idx, d.name.as_str(), d.is_daw)).collect();
+        assert_eq!(
+            names,
+            [(0, "Test DAW", true), (1, "Stage IOS-XL", false), (2, "Stage IOX", false), (3, "Record DAW", true)]
+        );
+        let xl = dev(&show, "Stage IOS-XL");
+        assert_eq!((xl.kind.as_str(), xl.in_ports.len(), xl.out_ports.len()), ("IOS-XL", 10, 14));
+        let iox = dev(&show, "Stage IOX");
+        assert_eq!((iox.ins, iox.outs), (12, 16));
+        assert_eq!((dev(&show, "Record DAW").ins, dev(&show, "Test DAW").outs), (64, 32));
+        let names: Vec<_> = show.inputs.iter().take(4).map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Kick", "Snare", "Vox", "Channel 4"]);
+        assert_eq!(show.edits.routes.len(), 8);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn roundtrip() {
-        let Some(path) = sample() else { return };
+        let path = sample();
         let mut show = Show::open(&path).unwrap();
         assert!(!path.with_extension("emo-wal").exists(), "open must not leave a -wal file");
-        assert!(show.devices.iter().any(|d| d.name == "IOX Vocals"));
-        let before = show.edits.routes.len();
 
-        let dst = Dst { cluster: INPUT, index: 39, section: 0, channel: 0 };
-        let src = Src { cluster: HW_IN, index: 12, channel: 8 };
-        show.apply(&[PatchOp { dst, src: Some(src) }]);
+        // patch IOX in 3 -> Ch 5, unpatch Snare
+        let dst = Dst { cluster: INPUT, index: 4, section: 0, channel: 0 };
+        let src = Src { cluster: HW_IN, index: 2, channel: 2 };
+        let snare = Dst { cluster: INPUT, index: 1, section: 0, channel: 0 };
+        show.apply(&[PatchOp { dst, src: Some(src) }, PatchOp { dst: snare, src: None }]);
         assert!(show.dirty());
         show.undo();
         assert!(!show.dirty());
@@ -638,65 +661,71 @@ mod tests {
         let r = reread.edits.routes.iter().find(|r| r.dst == dst).unwrap();
         assert_eq!(r.src, src);
         assert!(r.id.is_some());
-        assert!(reread.edits.routes.len() <= before + 1);
+        assert!(!reread.edits.routes.iter().any(|r| r.dst == snare));
+        // Input B of Vox is untouched
+        let vox_b = Dst { cluster: INPUT, index: 2, section: 1, channel: 0 };
+        let r = reread.edits.routes.iter().find(|r| r.dst == vox_b).unwrap();
+        assert_eq!((r.src, r.status), (Src { cluster: HW_IN, index: 0, channel: 0 }, 1));
+        assert_eq!(reread.edits.routes.len(), 8);
         assert!(!wal_in_use(&path));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn taps() {
-        let Some(path) = sample() else { return };
+        let path = sample();
         let mut show = Show::open(&path).unwrap();
-        let src = |show: &Show, idx: i64| {
-            show.view().sources.into_iter().find(|s| s.cluster == INPUT && s.index == idx).unwrap()
+        let src = |show: &Show, cluster: i64, idx: i64| {
+            show.view().sources.into_iter().find(|s| s.cluster == cluster && s.index == idx).unwrap()
         };
-        // Voc 1 ME: mono channel with a mono-to-stereo RVerb -> stereo direct out unless INP
-        let me = src(&show, 17);
-        assert_eq!((me.name.as_str(), me.tap, me.width), ("Voc 1 ME", Some(TAP_PRE), 2));
-        assert_eq!(src(&show, 16).width, 1);
-        assert_eq!(src(&show, 39).tap, Some(TAP_INP)); // VocAndi
+        // nothing stored: LV1 defaults are PRE for direct outs, PST for busses
+        let kick = src(&show, INPUT, 0);
+        assert_eq!((kick.name.as_str(), kick.tap, kick.width), ("Kick", Some(TAP_PRE), 1));
+        assert_eq!(src(&show, 3, 0).tap, Some(TAP_PST));
 
-        show.set_tap(INPUT, 17, TAP_INP).unwrap();
-        assert_eq!(src(&show, 17).width, 1);
+        show.set_tap(INPUT, 0, TAP_PSP).unwrap();
         assert!(show.dirty());
         show.undo();
         assert!(!show.dirty());
         show.redo();
-        assert!(show.set_tap(INPUT, 17, 7).is_err());
+        assert!(show.set_tap(INPUT, 0, 7).is_err());
+        assert!(show.set_tap(HW_IN, 0, TAP_PRE).is_err());
 
         show.save(&path, false).unwrap();
         let reread = Show::open(&path).unwrap();
-        assert_eq!(src(&reread, 17).tap, Some(TAP_INP));
+        assert_eq!(src(&reread, INPUT, 0).tap, Some(TAP_PSP));
+        assert_eq!(src(&reread, INPUT, 1).tap, Some(TAP_PRE));
         assert!(!reread.dirty());
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn driver_channels() {
-        let Some(path) = sample() else { return };
+        let path = sample();
         let mut show = Show::open(&path).unwrap();
-        let dev = |show: &Show, name: &str| show.view().devices.into_iter().find(|d| d.name == name).unwrap();
-        let aux = dev(&show, "Audio Aux PC");
-        assert_eq!((aux.is_daw, aux.ins, aux.outs), (true, 128, 128));
-        let idx = aux.idx;
+        let rec = dev(&show, "Record DAW");
+        assert_eq!((rec.is_daw, rec.ins, rec.outs), (true, 64, 64));
+        let idx = rec.idx;
         // a patch on a channel that disappears when shrinking
         let dst = Dst { cluster: INPUT, index: 40, section: 0, channel: 0 };
-        show.apply(&[PatchOp { dst, src: Some(Src { cluster: HW_IN, index: idx, channel: 100 }) }]);
+        show.apply(&[PatchOp { dst, src: Some(Src { cluster: HW_IN, index: idx, channel: 60 }) }]);
 
         assert!(show.set_driver_channels(idx, 33).is_err());
-        assert!(show.set_driver_channels(0, 32).is_err()); // IOS-XL is no DAW
+        assert!(show.set_driver_channels(1, 32).is_err()); // IOS-XL is no DAW
         show.set_driver_channels(idx, 32).unwrap();
-        let aux = dev(&show, "Audio Aux PC");
-        assert_eq!((aux.ins, aux.outs, aux.in_ports.len()), (32, 32, 32));
+        let rec = dev(&show, "Record DAW");
+        assert_eq!((rec.ins, rec.outs, rec.in_ports.len()), (32, 32, 32));
         assert!(!show.edits.routes.iter().any(|r| r.dst == dst));
+        // patches on remaining channels stay
+        assert_eq!(show.edits.routes.iter().filter(|r| r.dst.cluster == HW_OUT && r.dst.index == idx).count(), 2);
         show.undo();
         assert!(show.edits.routes.iter().any(|r| r.dst == dst));
-        assert_eq!(dev(&show, "Audio Aux PC").ins, 128);
+        assert_eq!(dev(&show, "Record DAW").ins, 64);
         show.redo();
 
         show.save(&path, false).unwrap();
         let reread = Show::open(&path).unwrap();
-        assert_eq!(dev(&reread, "Audio Aux PC").outs, 32);
+        assert_eq!(dev(&reread, "Record DAW").outs, 32);
         assert!(!reread.dirty());
         let db = Connection::open(&path).unwrap();
         let defaults: (i64, i64) = db
@@ -712,15 +741,16 @@ mod tests {
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
-    /// Writes the UI state of ../Main.emo to public/demo.json for the browser mock:
+    /// Writes the UI state of the test session to public/demo.json for the browser mock:
     /// `cargo test dump_demo -- --ignored`
     #[test]
     #[ignore]
     fn dump_demo() {
-        let Some(path) = sample() else { return };
+        let path = sample();
         let show = Show::open(&path).unwrap();
         let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../public/demo.json");
         fs::create_dir_all(out.parent().unwrap()).unwrap();
         fs::write(out, serde_json::to_string(&show.view()).unwrap()).unwrap();
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }
