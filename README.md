@@ -8,6 +8,13 @@ without the I/O hardware being online. The UI follows LV1's Patch page:
   → device outputs. The Source column sets the output source: INP, PRE, PST or PSP
 - **Device to Device**: device inputs → device outputs
 
+In the Input view, the rows above the column numbers show the preamps of the selected I/O device.
+Click **48V** to switch phantom power. Turn a gain knob by dragging up/down (Shift for fine),
+with the mouse wheel or the arrow keys. Double-click (or Enter) types a value: Enter confirms,
+Tab moves to the next input, Esc cancels. Gain can be edited on the IOS-XL and IOX (0 to +59.5 dB
+in 0.5 dB steps) and on the IONIC 16/24 and LV1 Classic (0 to +60 dB in 1 dB steps). Other
+devices show their gain read-only because their range isn't known yet.
+
 Click a cell to patch or unpatch it. Drag diagonally to patch a range; a drag that starts on a
 patched cell unpatches instead. Click row names to select them (shift for a range, ⌘/Ctrl to
 toggle), then press **Delete**. ⌘Z / ⇧⌘Z undo and redo, ⌘S saves, ⇧⌘S saves a patched copy
@@ -17,9 +24,13 @@ Orange text marks patches that come from outside the current matrix (another dev
 ## How it works
 
 The `.emo` file is an SQLite database. The app reads devices, channel names, colors and output
-sources from the live mixer state (snapshot `-1`, "Active"). It changes only two things: the
-`routes` table and the output source (INP/PRE/PST/PSP, `PARAM_OUTPUT_DIRECT_SOURCE`) in the
-live state. Stored snapshots are not touched.
+sources from the live mixer state (snapshot `-1`, "Active"). It changes only these things: the
+`routes` table, plus in the live state the output source (INP/PRE/PST/PSP,
+`PARAM_OUTPUT_DIRECT_SOURCE`), the driver channel count of DAWs, and the preamp settings. Stored
+snapshots are not touched. Preamps (`control_gain_map`, `line_in_phantom_map`) live in a YAML
+"IOM chunk" per device and snapshot (`iom_chunks` / `snapshot_iom`). The live state gets a new
+chunk; snapshots that shared the old one keep it. **Note:** recalling a snapshot whose scope
+includes the preamps brings back that snapshot's gain and 48V.
 
 The file only stores channel counts per device, so the port types (Analog Line, Phones, AES, ...)
 come from a table per device model in `src-tauri/src/layout.rs`. It covers the SoundGrid

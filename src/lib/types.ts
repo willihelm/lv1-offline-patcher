@@ -7,6 +7,21 @@ export interface Port {
   label: string;
 }
 
+/** Preamp of a device input; null where the input has no such control */
+export interface Preamp {
+  channel: number;
+  /** dB */
+  gain: number | null;
+  phantom: boolean | null;
+}
+
+/** mic preamp gain in dB */
+export interface GainRange {
+  min: number;
+  max: number;
+  step: number;
+}
+
 export interface Device {
   idx: number;
   name: string;
@@ -16,6 +31,9 @@ export interface Device {
   outs: number;
   inPorts: Port[];
   outPorts: Port[];
+  preamps: Preamp[];
+  /** set if gain can be edited */
+  gainRange: GainRange | null;
 }
 
 export interface Strip {

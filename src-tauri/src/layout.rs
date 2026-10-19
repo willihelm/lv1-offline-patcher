@@ -55,7 +55,8 @@ fn model_key(model: &str) -> String {
     key
 }
 
-/// Port layouts per model, from the manufacturers' specs (Waves SoundGrid interfaces chart).
+/// Port layouts per model, from the manufacturers' specs (Waves SoundGrid interfaces chart; IONIC
+/// and LV1 Classic checked against Waves' data sheets and user guides).
 /// Order: analog inputs/line outputs first, then headphones, then digital, as on the IOS-XL.
 /// Only IOS-XL and IOX are verified against real showfiles.
 fn model_layout(model: &str, dir: Dir) -> Option<Vec<Group>> {
@@ -84,8 +85,9 @@ fn model_layout(model: &str, dir: Dir) -> Option<Vec<Group>> {
         ("IONIC16", Dir::Out) => vec![line(12), phones(2), aes(1)],
         ("IONIC24", Dir::In) => vec![mic(24), aes(1)],
         ("IONIC24", Dir::Out) => vec![line(18), phones(2), aes(2)],
-        ("LV1CLASSIC", Dir::In) => vec![mic(16), aes(1)],
-        ("LV1CLASSIC", Dir::Out) => vec![line(12), aes(2)],
+        // one stereo phones output (1/4" and 1/8" jack carry the same signal)
+        ("LV1CLASSIC" | "CLASSIC", Dir::In) => vec![mic(16), aes(1)],
+        ("LV1CLASSIC" | "CLASSIC", Dir::Out) => vec![line(12), phones(1), aes(2)],
         // third-party stageboxes
         // 1 stereo AES in and out (Waves' chart wrongly lists 2 stereo AES outs)
         ("STAGEGRID1000", Dir::In) => vec![mic(8), aes(1)],
@@ -108,6 +110,26 @@ fn model_layout(model: &str, dir: Dir) -> Option<Vec<Group>> {
         ("SGMADI", Dir::Out) => vec![line(2), ("Digital", "MADI", numbered(128))],
         ("WSGBRIDGEFORDANTE" | "DANTEWSGXS", _) => vec![("Digital", "Dante", numbered(64))],
         ("BR1" | "SOUNDGRIDBR1", _) => vec![("Digital", "AVB", numbered(64))],
+        _ => return None,
+    })
+}
+
+/// Mic preamp gain in dB.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+pub struct GainRange {
+    pub min: f64,
+    pub max: f64,
+    pub step: f64,
+}
+
+/// Mic preamp gain range for models whose range is known.
+pub fn gain_range(model: &str) -> Option<GainRange> {
+    Some(match model_key(model).as_str() {
+        // DiGiGrid: 0 to +52.5 dB coarse (7.5 dB steps) plus 0 to 7 dB fine (0.5 dB steps)
+        "IOSXL" | "IOX" => GainRange { min: 0.0, max: 59.5, step: 0.5 },
+        // Waves Signature preamp, 1 dB steps. The data sheets say -3 to +60 dB, the control panel
+        // section of the IONIC user guides 0 to +60 dB; 0 is the lower limit both agree on.
+        "IONIC16" | "IONIC24" | "LV1CLASSIC" | "CLASSIC" => GainRange { min: 0.0, max: 60.0, step: 1.0 },
         _ => return None,
     })
 }
@@ -175,6 +197,13 @@ mod tests {
         assert_eq!(model_key("IONIC 24"), "IONIC24");
         assert_eq!(model_key("DSPRO StageGrid 4000"), "STAGEGRID4000");
         assert_eq!(model_key("DiGiGrid D"), "D");
+        assert_eq!(model_key("Waves LV1 Classic"), "LV1CLASSIC");
+
+        let classic = ports("LV1 Classic", false, Dir::Out, 18);
+        assert_eq!((classic[12].minor.as_str(), classic[12].label.as_str()), ("Phones", "L"));
+        assert_eq!((classic[14].minor.as_str(), classic[14].label.as_str()), ("AES", "1L"));
+        assert_eq!(gain_range("IONIC 24").map(|g| g.step), Some(1.0));
+        assert_eq!(gain_range("Generic 64 IO"), None);
 
         let ionic = ports("IONIC 24", false, Dir::Out, 26);
         assert_eq!((ionic[17].minor.as_str(), ionic[17].label.as_str()), ("Line", "18"));

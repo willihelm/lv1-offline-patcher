@@ -1,3 +1,4 @@
+mod iom;
 mod layout;
 mod show;
 
@@ -85,6 +86,21 @@ fn set_driver_channels(state: State<AppState>, idx: i64, count: i64) -> CmdResul
     })
 }
 
+/// Set gain (dB) and/or 48V of an input of an I/O device; `None` leaves a value unchanged.
+#[tauri::command]
+fn set_preamp(
+    state: State<AppState>,
+    idx: i64,
+    channel: i64,
+    gain: Option<f64>,
+    phantom: Option<bool>,
+) -> CmdResult<serde_json::Value> {
+    with_show(&state, |s| {
+        s.set_preamp(idx, channel, gain, phantom)?;
+        view(s)
+    })
+}
+
 /// Save into the opened file (with backup), or into `path` as a patched copy.
 #[tauri::command]
 fn save(state: State<AppState>, path: Option<String>, force: bool) -> CmdResult<SaveResult> {
@@ -100,7 +116,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![open_show, get_show, patch, undo, redo, set_tap, set_driver_channels, save])
+        .invoke_handler(tauri::generate_handler![open_show, get_show, patch, undo, redo, set_tap, set_driver_channels, set_preamp, save])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

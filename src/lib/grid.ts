@@ -8,6 +8,8 @@ import {
   type Dst,
   type PatchOp,
   type Port,
+  type GainRange,
+  type Preamp,
   type ShowState,
   type Src,
   type Strip,
@@ -42,6 +44,8 @@ export interface Col {
   dst?: Dst;
   /** occupied by a source that is not a row of this matrix */
   note?: string;
+  /** gain / 48V of the device input */
+  preamp?: Preamp;
 }
 
 export interface Grid {
@@ -51,6 +55,8 @@ export interface Grid {
   cols: Col[];
   /** "row:col" of patched cells */
   patched: Set<string>;
+  /** device whose input preamps are shown above the columns */
+  preamps?: { device: number; gainRange: GainRange | null };
 }
 
 const key = (a: { cluster: number; index: number; channel: number }) => `${a.cluster}/${a.index}/${a.channel}`;
@@ -112,6 +118,7 @@ export function inputGrid(show: ShowState, device: Device, section: number): Gri
   const cols = device.inPorts.map((port) => ({
     port,
     src: { cluster: CLUSTER.HW_IN, index: device.idx, channel: port.channel },
+    preamp: device.preamps.find((p) => p.channel === port.channel),
   }));
   const colOf = columnIndex(cols);
   const patched = new Set<string>();
@@ -121,7 +128,8 @@ export function inputGrid(show: ShowState, device: Device, section: number): Gri
     const c = src && src.index === device.idx ? colOf.get(src.channel) : undefined;
     if (c !== undefined) patched.add(`${r}:${c}`);
   });
-  return { title: device.name, rowTitle: "Channel Name", rows, cols, patched };
+  const preamps = device.preamps.length ? { device: device.idx, gainRange: device.gainRange } : undefined;
+  return { title: device.name, rowTitle: "Channel Name", rows, cols, patched, preamps };
 }
 
 /** Matrix with hardware outputs of `device` as columns and the given sources as rows. */

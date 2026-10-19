@@ -169,6 +169,8 @@
   function keydown(e: KeyboardEvent) {
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
+    // typing a gain value: Backspace/Delete edit the text, not the patch
+    if (e.target instanceof HTMLInputElement && !(mod && (k === "o" || k === "s"))) return;
     if (mod && k === "o") openFile();
     else if (mod && k === "s") saveFile(e.shiftKey);
     else if (mod && k === "z" && show) run(e.shiftKey ? api.redo : api.undo);
@@ -219,31 +221,33 @@
         </div>
       </div>
       <div class="panel devices">
-        {#each colDevices as d (d.idx)}
-          <div class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx}>
-            <button class="dsel" title={d.name} onclick={() => (devIdx = d.idx)}>
-              <div class="dhead">{deviceNo(d)} {d.name}</div>
-              <div class="dbody">
-                <span class="kind">{d.isDaw ? "DAW" : d.kind}</span>
-                {#if !d.isDaw}
-                  <span class="io">{view === "input" ? d.inPorts.length + " in" : d.outPorts.length + " out"}</span>
-                {/if}
-              </div>
-            </button>
-            {#if d.isDaw}
-              <select
-                class="driver"
-                title="Driver Channels (removes patches on channels that no longer exist)"
-                value={d.ins === d.outs ? d.ins : ""}
-                disabled={busy}
-                onchange={(e) => setDriverChannels(d, +e.currentTarget.value)}
-              >
-                {#if d.ins !== d.outs}<option value="" disabled>{d.ins} in / {d.outs} out</option>{/if}
-                {#each DRIVER_CHANNELS as n}<option value={n}>{n} ch</option>{/each}
-              </select>
-            {/if}
-          </div>
-        {/each}
+        <div class="devrow">
+          {#each colDevices as d (d.idx)}
+            <div class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx}>
+              <button class="dsel" title={d.name} onclick={() => (devIdx = d.idx)}>
+                <div class="dhead">{deviceNo(d)} {d.name}</div>
+                <div class="dbody">
+                  <span class="kind">{d.isDaw ? "DAW" : d.kind}</span>
+                  {#if !d.isDaw}
+                    <span class="io">{view === "input" ? d.inPorts.length + " in" : d.outPorts.length + " out"}</span>
+                  {/if}
+                </div>
+              </button>
+              {#if d.isDaw}
+                <select
+                  class="driver"
+                  title="Driver Channels (removes patches on channels that no longer exist)"
+                  value={d.ins === d.outs ? d.ins : ""}
+                  disabled={busy}
+                  onchange={(e) => setDriverChannels(d, +e.currentTarget.value)}
+                >
+                  {#if d.ins !== d.outs}<option value="" disabled>{d.ins} in / {d.outs} out</option>{/if}
+                  {#each DRIVER_CHANNELS as n}<option value={n}>{n} ch</option>{/each}
+                </select>
+              {/if}
+            </div>
+          {/each}
+        </div>
       </div>
     </section>
 
@@ -306,6 +310,7 @@
               bind:hover
               onpatch={apply}
               ontap={(cluster, index, tap) => run(() => api.setTap(cluster, index, tap))}
+              onpreamp={(idx, channel, gain, phantom) => run(() => api.setPreamp(idx, channel, gain, phantom))}
               corner={tools}
             />
           </div>
@@ -428,11 +433,14 @@
     gap: 8px;
   }
   .devices {
-    display: flex;
-    gap: 10px;
     padding: 10px;
     overflow-x: auto;
-    align-items: stretch;
+  }
+  /* sized by the cards, not by the scroll area: a horizontal scrollbar must not squeeze them */
+  .devrow {
+    display: flex;
+    gap: 10px;
+    width: max-content;
   }
   .device {
     flex: none;
@@ -459,18 +467,28 @@
     flex-direction: column;
   }
   .driver {
+    /* a fixed height instead of the native control, which is taller in WebKit than in Chromium */
+    appearance: none;
+    -webkit-appearance: none;
+    height: 22px;
     margin: 0 6px 6px;
-    padding: 2px 4px;
+    padding: 0 18px 0 6px;
     font: inherit;
     font-size: 12px;
     font-weight: 600;
+    line-height: 20px;
     text-align: center;
     text-align-last: center;
     color: var(--text);
-    background: #262628;
+    background: #262628
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a6a6aa' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+      no-repeat right 6px center / 9px 6px;
     border: 1px solid #555;
     border-radius: 4px;
     cursor: pointer;
+  }
+  .driver:hover:not(:disabled) {
+    border-color: #888;
   }
   .dhead {
     background: #3d8bfd;
@@ -491,7 +509,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 8px 4px;
+    padding: 6px 4px;
     gap: 2px;
   }
   .kind {

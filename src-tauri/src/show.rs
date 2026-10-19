@@ -1,17 +1,18 @@
 //! Reading and writing the patch of a Waves LV1 showfile (.emo, an SQLite database).
 //!
-//! Modified are the `routes` table and the direct-out source (tap point) of the live mixer
-//! state. Edits are kept in memory (with undo/redo) and written back in one transaction on
+//! Modified are the `routes` table, the direct-out source (tap point) of the live mixer state
+//! and the preamp settings (gain, 48V) of the I/O devices in the live state. Edits are kept in memory (with undo/redo) and written back in one transaction on
 //! save, after a backup of the file was made.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::layout::{self, Port};
+use crate::iom::{self, Preamp};
+use crate::layout::{self, GainRange, Port};
 
 // cluster_type ids (see table cluster_type)
 pub const INPUT: i64 = 0;
@@ -51,10 +52,25 @@ pub struct Device {
     pub outs: i64,
     pub in_ports: Vec<Port>,
     pub out_ports: Vec<Port>,
+    /// gain / 48V per input channel, empty if the file has no preamp data for the device
+    pub preamps: Vec<Preamp>,
+    /// set if gain can be edited
+    pub gain_range: Option<GainRange>,
     #[serde(skip)]
     db_id: i64,
     #[serde(skip)]
     model: String,
+    #[serde(skip)]
+    iom: Option<IomChunk>,
+}
+
+/// The IOM chunk (preamp settings) of a device in the live state.
+#[derive(Clone)]
+struct IomChunk {
+    snapshot: i64,
+    device_id: i64,
+    vendor_id: i64,
+    text: String,
 }
 
 impl Device {
@@ -168,6 +184,8 @@ struct Edits {
     taps: HashMap<(i64, i64), i64>,
     /// driver channel count (in and out) per DAW device idx, only where changed
     driver_channels: HashMap<i64, i64>,
+    /// preamp settings per (device idx, channel), only where changed
+    preamps: HashMap<(i64, i64), Preamp>,
 }
 
 pub struct Show {
@@ -191,7 +209,7 @@ impl Show {
         // files behind. Nothing is written here; closing removes them again.
         let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(err)?;
-        let devices = load_devices(&db).map_err(err)?;
+        let mut devices = load_devices(&db).map_err(err)?;
         let (snapshot_id, snapshot) = db
             .query_row(
                 "SELECT s.id, s.number, s.name FROM snapshot s
@@ -210,6 +228,9 @@ impl Show {
             .query_row("SELECT EXISTS(SELECT 1 FROM snapshot_chainer WHERE snapshot_id = ?)", [ACTIVE_SNAPSHOT], |r| r.get(0))
             .map_err(err)?;
         let state_snapshot = if has_active { Some(ACTIVE_SNAPSHOT) } else { snapshot_id };
+        if let Some(snap) = state_snapshot {
+            load_preamps(&db, snap, &mut devices).map_err(err)?;
+        }
         let strips = load_strips(&db, state_snapshot).map_err(err)?;
         let routes = load_routes(&db).map_err(err)?;
 
@@ -231,7 +252,7 @@ impl Show {
             inputs,
             sources,
             original_ids: routes.iter().filter_map(|r| r.id).collect(),
-            edits: Edits { routes, taps, driver_channels: HashMap::new() },
+            edits: Edits { routes, taps, driver_channels: HashMap::new(), preamps: HashMap::new() },
             undo: Vec::new(),
             redo: Vec::new(),
         })
@@ -260,12 +281,26 @@ impl Show {
         }
     }
 
-    /// The device with the edited driver channel count applied.
+    /// The device with the edited driver channel count and preamps applied.
     fn device(&self, d: &Device) -> Device {
-        match self.edits.driver_channels.get(&d.idx) {
+        let mut d = match self.edits.driver_channels.get(&d.idx) {
             Some(&n) => d.with_channels(n, n),
             None => d.clone(),
+        };
+        for p in &mut d.preamps {
+            if let Some(edit) = self.edits.preamps.get(&(d.idx, p.channel)) {
+                *p = edit.clone();
+            }
         }
+        d
+    }
+
+    /// I/O devices whose preamp settings differ from the file, with the edited settings.
+    fn changed_preamps(&self) -> impl Iterator<Item = (&Device, Vec<Preamp>)> {
+        self.devices.iter().filter_map(|d| {
+            let preamps = self.device(d).preamps;
+            (preamps != d.preamps).then_some((d, preamps))
+        })
     }
 
     /// DAW devices whose driver channel count differs from the file.
@@ -294,6 +329,7 @@ impl Show {
             || routes.len() != self.original_ids.len()
             || self.changed_taps().next().is_some()
             || self.changed_drivers().next().is_some()
+            || self.changed_preamps().next().is_some()
     }
 
     fn checkpoint(&mut self) {
@@ -356,6 +392,39 @@ impl Show {
             let gone_dst = r.dst.cluster == HW_OUT && r.dst.index == idx && r.dst.channel >= count;
             !gone_src && !gone_dst
         });
+        Ok(())
+    }
+
+    /// Set gain (dB, rounded to the device's gain step) and/or 48V of an input of an I/O device.
+    pub fn set_preamp(&mut self, idx: i64, channel: i64, gain: Option<f64>, phantom: Option<bool>) -> Result<()> {
+        let Some(dev) = self.devices.iter().find(|d| d.idx == idx) else {
+            return Err(format!("Unknown device {idx}"));
+        };
+        let dev = self.device(dev);
+        let Some(cur) = dev.preamps.iter().find(|p| p.channel == channel) else {
+            return Err(format!("{} input {} has no preamp", dev.name, channel + 1));
+        };
+        let mut next = cur.clone();
+        if let Some(g) = gain {
+            let (Some(GainRange { min, max, step }), Some(_)) = (dev.gain_range, cur.gain) else {
+                return Err(format!("Gain of {} input {} cannot be edited", dev.name, channel + 1));
+            };
+            if !g.is_finite() {
+                return Err(format!("Invalid gain {g}"));
+            }
+            // + 0.0 turns -0 into 0
+            next.gain = Some(((g / step).round() * step).clamp(min, max) + 0.0);
+        }
+        if let Some(on) = phantom {
+            if cur.phantom.is_none() {
+                return Err(format!("{} input {} has no phantom power", dev.name, channel + 1));
+            }
+            next.phantom = Some(on);
+        }
+        if next != *cur {
+            self.checkpoint();
+            self.edits.preamps.insert((idx, channel), next);
+        }
         Ok(())
     }
 
@@ -453,6 +522,36 @@ impl Show {
                 .map_err(err)?;
             }
         }
+        // a new chunk for the live state; triggers on snapshot_iom keep iom_chunks.ref_count and
+        // drop the old chunk once no snapshot uses it any more
+        for (dev, preamps) in self.changed_preamps() {
+            let Some(chunk) = &dev.iom else { continue };
+            let text = iom::with_preamps(&chunk.text, &preamps);
+            let existing: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM iom_chunks WHERE iom_chunk = ?1 AND device_id = ?2 AND vendor_id = ?3 LIMIT 1",
+                    params![text, chunk.device_id, chunk.vendor_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(err)?;
+            let id = match existing {
+                Some(id) => id,
+                None => {
+                    tx.execute(
+                        "INSERT INTO iom_chunks (ref_count, device_id, vendor_id, iom_chunk) VALUES (0, ?1, ?2, ?3)",
+                        params![chunk.device_id, chunk.vendor_id, text],
+                    )
+                    .map_err(err)?;
+                    tx.last_insert_rowid()
+                }
+            };
+            tx.execute(
+                "UPDATE snapshot_iom SET iom_chunk_id = ?1 WHERE snapshot_id = ?2 AND io_bank = ?3 AND io_slot = ?4",
+                params![id, chunk.snapshot, dev.idx / 8, dev.idx % 8],
+            )
+            .map_err(err)?;
+        }
         tx.commit().map_err(err)?;
         // the file runs in WAL mode: fold the changes back into the .emo itself
         db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).map_err(err)?;
@@ -513,12 +612,41 @@ fn load_devices(db: &Connection) -> rusqlite::Result<Vec<Device>> {
                 outs,
                 in_ports: layout::ports(&model, is_daw, layout::Dir::In, ins),
                 out_ports: layout::ports(&model, is_daw, layout::Dir::Out, outs),
+                preamps: Vec::new(),
+                gain_range: None,
                 db_id: r.get(9)?,
                 model,
+                iom: None,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(devices)
+}
+
+/// Preamp settings of the I/O devices in `snapshot`. A chunk is only used if it was written
+/// for the device model in that slot.
+fn load_preamps(db: &Connection, snapshot: i64, devices: &mut [Device]) -> rusqlite::Result<()> {
+    let mut stmt = db.prepare(
+        "SELECT c.device_id, c.vendor_id, c.iom_chunk
+         FROM snapshot_iom s
+         JOIN iom_chunks c ON c.id = s.iom_chunk_id
+         JOIN device_iobox b ON b.device_id = c.device_id AND b.vendor_id = c.vendor_id
+         JOIN device d ON d.id = b.id AND d.io_bank = s.io_bank AND d.assign = s.io_slot
+         WHERE s.snapshot_id = ?1 AND d.id = ?2",
+    )?;
+    for d in devices.iter_mut().filter(|d| !d.is_daw) {
+        let chunk = stmt
+            .query_row(params![snapshot, d.db_id], |r| {
+                Ok(IomChunk { snapshot, device_id: r.get(0)?, vendor_id: r.get(1)?, text: r.get::<_, Option<String>>(2)?.unwrap_or_default() })
+            })
+            .optional()?;
+        if let Some(chunk) = chunk {
+            d.preamps = iom::preamps(&chunk.text);
+            d.gain_range = layout::gain_range(&d.model).filter(|_| d.preamps.iter().any(|p| p.gain.is_some()));
+            d.iom = Some(chunk);
+        }
+    }
+    Ok(())
 }
 
 /// All active mixer objects.
@@ -737,6 +865,50 @@ mod tests {
             )
             .unwrap();
         assert_eq!(defaults, (32, 32));
+        drop(db);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn preamps() {
+        let path = sample();
+        let mut show = Show::open(&path).unwrap();
+        let xl = dev(&show, "Stage IOS-XL");
+        assert_eq!(xl.gain_range, Some(GainRange { min: 0.0, max: 59.5, step: 0.5 }));
+        assert_eq!(xl.preamps.len(), 8);
+        assert_eq!(xl.preamps[1], Preamp { channel: 1, gain: Some(36.0), phantom: Some(true) });
+        assert_eq!(dev(&show, "Stage IOX").preamps.len(), 12);
+        assert!(dev(&show, "Test DAW").preamps.is_empty());
+
+        assert!(show.set_preamp(xl.idx, 8, Some(10.0), None).is_err()); // AES input
+        assert!(show.set_preamp(0, 0, None, Some(true)).is_err()); // DAW
+        show.set_preamp(xl.idx, 1, Some(36.0), Some(true)).unwrap();
+        assert!(!show.dirty() && show.undo.is_empty());
+        show.set_preamp(xl.idx, 0, Some(12.3), Some(true)).unwrap();
+        show.set_preamp(xl.idx, 1, Some(80.0), None).unwrap();
+        let p = &dev(&show, "Stage IOS-XL").preamps;
+        assert_eq!((p[0].gain, p[0].phantom, p[1].gain), (Some(12.5), Some(true), Some(59.5)));
+        show.undo();
+        show.undo();
+        assert!(!show.dirty());
+        show.redo();
+        show.redo();
+
+        let db = Connection::open(&path).unwrap();
+        let chunks: i64 = db.query_row("SELECT count(*) FROM iom_chunks", [], |r| r.get(0)).unwrap();
+        drop(db);
+        show.save(&path, false).unwrap();
+        let reread = Show::open(&path).unwrap();
+        assert!(!reread.dirty());
+        let p = &dev(&reread, "Stage IOS-XL").preamps;
+        assert_eq!((p[0].gain, p[0].phantom, p[1].gain, p[2].gain), (Some(12.5), Some(true), Some(59.5), Some(30.0)));
+        // the old chunk was only used by the live state: replaced, not duplicated
+        let db = Connection::open(&path).unwrap();
+        let (n, refs): (i64, i64) = db
+            .query_row("SELECT count(*), sum(ref_count) FROM iom_chunks WHERE id > 0", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        let total: i64 = db.query_row("SELECT count(*) FROM iom_chunks", [], |r| r.get(0)).unwrap();
+        assert_eq!((total, n, refs), (chunks, 2, 2));
         drop(db);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }

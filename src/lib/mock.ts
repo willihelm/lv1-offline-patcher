@@ -66,6 +66,17 @@ export async function invoke<T>(cmd: string, args: Record<string, any>): Promise
       );
       break;
     }
+    case "set_preamp": {
+      const d = show!.devices.find((x) => x.idx === args.idx);
+      const p = d?.preamps.find((x) => x.channel === args.channel);
+      if (!d || !p) throw "No preamp";
+      if (args.gain != null && d.gainRange) {
+        const { min, max, step } = d.gainRange;
+        p.gain = Math.min(max, Math.max(min, Math.round(args.gain / step) * step));
+      }
+      if (args.phantom != null) p.phantom = args.phantom;
+      break;
+    }
     case "save":
       undoStack = [];
       redoStack = [];

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { cellOp, diagonal, type Grid } from "./grid";
+  import Knob from "./Knob.svelte";
   import { TAP_LABELS, type PatchOp } from "./types";
 
   let {
@@ -10,6 +11,7 @@
     hover = $bindable(null),
     onpatch,
     ontap,
+    onpreamp,
     corner,
   }: {
     grid: Grid;
@@ -18,11 +20,45 @@
     hover?: { r: number; c: number } | null;
     onpatch: (ops: PatchOp[]) => void;
     ontap: (cluster: number, index: number, tap: number) => void;
+    /** null leaves the value unchanged */
+    onpreamp: (device: number, channel: number, gain: number | null, phantom: boolean | null) => void;
     /** Rendered in the empty top-left corner above the row titles. */
     corner?: Snippet;
   } = $props();
 
   const hasTaps = $derived(grid.rows.some((row) => row.heading === undefined && row.tap));
+
+  /** column whose gain is being typed in */
+  let editing = $state<number | null>(null);
+
+  function commitGain(c: number, input: HTMLInputElement) {
+    if (editing !== c) return;
+    editing = null;
+    const gain = parseFloat(input.value.replace(",", "."));
+    const p = grid.cols[c]?.preamp;
+    if (grid.preamps && p && Number.isFinite(gain) && gain !== p.gain) onpreamp(grid.preamps.device, p.channel, gain, null);
+  }
+
+  function gainKey(c: number, e: KeyboardEvent) {
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      commitGain(c, e.currentTarget as HTMLInputElement);
+      // Tab moves on to the next input with a gain control
+      if (e.key === "Tab") {
+        const step = e.shiftKey ? -1 : 1;
+        let n = c + step;
+        while (n >= 0 && n < grid.cols.length && grid.cols[n].preamp?.gain == null) n += step;
+        if (n >= 0 && n < grid.cols.length) editing = n;
+      }
+    } else if (e.key === "Escape") {
+      editing = null;
+    }
+  }
+
+  const focusSelect = (el: HTMLInputElement) => {
+    el.focus();
+    el.select();
+  };
 
   let matrix: HTMLDivElement;
   let drag = $state<{ r0: number; c0: number; r1: number; c1: number; erase: boolean } | null>(null);
@@ -104,10 +140,17 @@
   style:--font="{fontSize}px"
   style:--rows={grid.rows.length}
   style:--cols={grid.cols.length}
+  style:--pre-h={grid.preamps ? `calc(30px + ${cell}px)` : "0px"}
 >
   <div class="canvas">
     <div class="corner">
       {@render corner?.()}
+      {#if grid.preamps}
+        <div class="prelabels">
+          <div class="prelabel">48V</div>
+          <div class="prelabel knoblabel">Gain</div>
+        </div>
+      {/if}
       <div class="corner-titles">
         <span class="corner-title">{grid.rowTitle}</span>
         {#if hasTaps}<span class="tapcol">Source</span>{/if}
@@ -123,6 +166,59 @@
       <div class="groups">
         {#each minors as g}<div class="group" style:width="calc({g.n} * var(--cell))">{g.text}</div>{/each}
       </div>
+      {#if grid.preamps}
+        {@const { device, gainRange } = grid.preamps}
+        <div class="prerow phantoms">
+          {#each grid.cols as col}
+            {@const p = col.preamp}
+            {#if p?.phantom != null}
+              <button
+                class="phantom"
+                class:on={p.phantom}
+                title="48V phantom power {p.phantom ? 'on' : 'off'}"
+                onclick={() => onpreamp(device, p.channel, null, !p.phantom)}
+              >48V</button>
+            {:else}
+              <div class="precell"></div>
+            {/if}
+          {/each}
+        </div>
+        <div class="prerow knobs">
+          {#each grid.cols as col, c}
+            {@const p = col.preamp}
+            {#if p?.gain != null && gainRange && editing === c}
+              <input
+                class="gain-input"
+                type="number"
+                step={gainRange.step}
+                min={gainRange.min}
+                max={gainRange.max}
+                value={p.gain}
+                use:focusSelect
+                onkeydown={(e) => gainKey(c, e)}
+                onblur={(e) => commitGain(c, e.currentTarget)}
+              />
+            {:else if p?.gain != null}
+              <div class="gain">
+                <Knob
+                  value={p.gain}
+                  min={gainRange?.min ?? 0}
+                  max={gainRange?.max ?? Math.max(p.gain, 1)}
+                  step={gainRange?.step}
+                  disabled={!gainRange}
+                  title={gainRange
+                    ? `Gain ${p.gain} dB (${gainRange.min} to ${gainRange.max} dB). Drag or scroll to turn, Shift for fine, double-click to type`
+                    : `Gain ${p.gain} dB (range of this device unknown, not editable)`}
+                  onchange={(gain) => onpreamp(device, p.channel, gain, null)}
+                  onedit={() => (editing = c)}
+                />
+              </div>
+            {:else}
+              <div class="precell"></div>
+            {/if}
+          {/each}
+        </div>
+      {/if}
       <div class="numbers">
         {#each grid.cols as col, c}
           <div
@@ -222,7 +318,7 @@
 <style>
   .scroller {
     --label-w: 330px;
-    --head-h: 112px;
+    --head-h: calc(112px + var(--pre-h));
     overflow: auto;
     height: 100%;
     background: var(--panel);
@@ -247,6 +343,10 @@
   .corner-titles {
     display: flex;
     align-items: flex-end;
+    flex: none;
+    /* the corner is exactly as high as the tools (84px) plus this */
+    height: 28px;
+    box-sizing: border-box;
     padding: 0 0 8px 40px;
     font-size: 14px;
     font-weight: 600;
@@ -260,6 +360,7 @@
   }
   .title {
     height: 30px;
+    box-sizing: border-box;
     line-height: 30px;
     padding-left: 8px;
     font-weight: 700;
@@ -289,6 +390,95 @@
   .numbers {
     display: flex;
     height: 34px;
+  }
+  .prelabels {
+    flex: none;
+    /* the titles (28px) are lower than the column numbers (34px): line the labels up with their rows */
+    margin-bottom: 6px;
+  }
+  .prelabel {
+    user-select: none;
+    -webkit-user-select: none;
+    height: 24px;
+    line-height: 24px;
+    padding-right: 10px;
+    text-align: right;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-dim);
+  }
+  .prerow {
+    display: flex;
+    height: 24px;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  /* the corner needs a bit more height than the two rows for the tools above their labels */
+  .prerow.phantoms {
+    margin-top: 6px;
+  }
+  .precell,
+  .phantom,
+  .gain,
+  .gain-input {
+    width: var(--cell);
+    height: 24px;
+    flex: none;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-right: 1px solid #222;
+    border-bottom: 1px solid #222;
+    border-radius: 0;
+    background: #2a2a2c;
+    font: inherit;
+    font-size: min(11px, calc(var(--cell) * 0.34));
+    font-weight: 700;
+    text-align: center;
+  }
+  .phantom {
+    color: #6a6a6e;
+    cursor: pointer;
+  }
+  .phantom.on {
+    background: #c62828;
+    color: #fff;
+  }
+  .prerow.knobs,
+  .knoblabel {
+    height: var(--cell);
+  }
+  .knoblabel {
+    line-height: var(--cell);
+  }
+  .knobs .precell,
+  .knobs .gain,
+  .knobs .gain-input {
+    height: var(--cell);
+  }
+  .phantom:hover {
+    border-color: #222;
+    outline: 1px solid #aaa;
+    outline-offset: -1px;
+  }
+  .gain-input {
+    /* wide enough to type in at small zoom levels */
+    width: max(var(--cell), 44px);
+    position: relative;
+    z-index: 1;
+    margin-right: min(0px, calc(var(--cell) - 44px));
+    background: #111;
+    color: var(--text);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+  .gain-input::-webkit-inner-spin-button,
+  .gain-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
   }
   .num {
     width: var(--cell);

@@ -14,5 +14,7 @@ export const setTap = (cluster: number, index: number, tap: number) =>
   call<ShowState>("set_tap", { cluster, index, tap });
 export const setDriverChannels = (idx: number, count: number) =>
   call<ShowState>("set_driver_channels", { idx, count });
+export const setPreamp = (idx: number, channel: number, gain: number | null, phantom: boolean | null) =>
+  call<ShowState>("set_preamp", { idx, channel, gain, phantom });
 export const save = (path: string | null, force: boolean) =>
   call<{ show: ShowState; backup: string | null }>("save", { path, force });
