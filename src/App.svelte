@@ -4,6 +4,7 @@
   import { ask, open, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import * as api from "./lib/api";
   import PatchGrid from "./lib/PatchGrid.svelte";
+  import * as recent from "./lib/recent";
   import { clearRowsOps, deviceGrid, inputGrid, outputGrid, type OutputTab, type PatchView } from "./lib/grid";
   import { CLUSTER, DRIVER_CHANNELS, type Device, type PatchOp, type ShowState } from "./lib/types";
 
@@ -19,6 +20,7 @@
   let message = $state("");
   let busy = $state(false);
   let dragging = $state(false);
+  let recentShows = $state(recent.load());
 
   const views: [PatchView, string][] = [
     ["input", "Input"],
@@ -39,7 +41,9 @@
     return srcDevice ? deviceGrid(show, srcDevice, device) : null;
   });
 
-  const fileName = $derived(show?.path.split(/[\\/]/).pop() ?? "");
+  const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
+  const dirName = (p: string) => p.slice(0, p.length - baseName(p).length).replace(/[\\/]$/, "");
+  const fileName = $derived(show ? baseName(show.path) : "");
   const status = $derived.by(() => {
     if (!grid || !hover || !device) return "";
     const row = grid.rows[hover.r];
@@ -79,7 +83,14 @@
 
   async function openPath(path: string) {
     await run(async () => {
-      const s = await api.openShow(path);
+      let s;
+      try {
+        s = await api.openShow(path);
+      } catch (e) {
+        recentShows = recent.remove(path);
+        throw e;
+      }
+      recentShows = recent.add(path);
       message = s.lv1Open
         ? "Warning: this show seems to be open in LV1. Close it there before saving."
         : `Opened ${path}`;
@@ -306,11 +317,37 @@
     </section>
   {:else}
     <section class="welcome">
-      <h1>LV1 Offline Patcher</h1>
-      <p>Open a Waves LV1 showfile (<code>.emo</code>) to edit its input, output and device-to-device patch without the hardware being online.</p>
-      <p class="hint">LV1 must not have the show open while saving. A backup (<code>.bak-&lt;timestamp&gt;</code>) is written before every save.</p>
-      <button class="primary big" onclick={openFile}>Open Showfile…</button>
-      <p class="hint">…or drop it onto this window.</p>
+      <div class="intro">
+        <div class="eyebrow">Waves LV1</div>
+        <h1>Offline Patcher</h1>
+        <p class="lead">
+          Edit the input, output and device-to-device patch of an LV1 showfile without the hardware being online.
+        </p>
+        <div class="actions">
+          <button class="primary" onclick={openFile} disabled={busy}>Open Showfile…</button>
+          <span>or drop an <code>.emo</code> file onto this window</span>
+        </div>
+        <ul class="notes">
+          <li>Close the show in LV1 before saving.</li>
+          <li>A backup (<code>.bak-&lt;timestamp&gt;</code>) is written before every save.</li>
+        </ul>
+      </div>
+      <div class="panel recent">
+        <div class="recenthead">Recent Showfiles</div>
+        {#each recentShows as p (p)}
+          <div class="recentrow">
+            <button class="recentfile" title={p} disabled={busy} onclick={() => openPath(p)}>
+              <strong>{baseName(p)}</strong>
+              <span>{dirName(p)}</span>
+            </button>
+            <button class="forget" title="Remove from list" onclick={() => (recentShows = recent.remove(p))}>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+            </button>
+          </div>
+        {:else}
+          <div class="norecent">Showfiles you open will appear here.</div>
+        {/each}
+      </div>
     </section>
   {/if}
 
@@ -562,10 +599,6 @@
     min-height: 0;
     min-width: 0;
   }
-  .hint {
-    font-size: 12px;
-    color: var(--text-dim);
-  }
   .empty {
     flex: 1;
     display: grid;
@@ -574,17 +607,139 @@
   }
   .welcome {
     grid-row: 2 / 4;
+    align-self: center;
+    justify-self: center;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    gap: 48px;
+    align-items: start;
+    width: min(960px, 100%);
+    padding: 0 32px;
+    box-sizing: border-box;
+  }
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .intro h1 {
+    margin: 4px 0 12px;
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .lead {
+    margin: 0 0 24px;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--text-dim);
+  }
+  .actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .actions button {
+    padding: 9px 18px;
+    font-size: 14px;
+  }
+  .notes {
+    margin: 28px 0 0;
+    padding: 14px 0 0 18px;
+    border-top: 1px solid #333;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--text-dim);
+  }
+  .recent {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    text-align: center;
-    max-width: 640px;
-    margin: auto;
+    padding: 6px;
+    min-width: 0;
   }
-  .welcome h1 {
-    margin: 0 0 8px;
+  .recenthead {
+    padding: 8px 10px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .recentrow {
+    display: flex;
+    align-items: center;
+    border-radius: 5px;
+  }
+  .recentrow:hover {
+    background: #303033;
+  }
+  .recentfile {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 8px 10px;
+    border: 0;
+    background: none;
+    text-align: left;
+  }
+  .recentfile strong,
+  .recentfile span {
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .recentfile span {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text-dim);
+  }
+  .forget {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    margin-right: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-dim);
+    visibility: hidden;
+  }
+  .recentrow:hover .forget {
+    visibility: visible;
+  }
+  .forget:hover {
+    color: var(--text);
+    background: #444;
+  }
+  .forget svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  .norecent {
+    padding: 4px 10px 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  @media (max-width: 720px) {
+    .welcome {
+      grid-template-columns: 1fr;
+      gap: 28px;
+    }
   }
   .dropzone {
     position: fixed;
