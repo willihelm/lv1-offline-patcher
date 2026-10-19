@@ -64,11 +64,12 @@ cd src-tauri && cargo test # runs on temp copies of src-tauri/testdata/lv1-test-
 ```
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, ...).
-`npm run release` bumps the version in `package.json`, `tauri.conf.json` and `Cargo.toml`, adds the
-`feat`/`fix` commits since the last tag to `CHANGELOG.md`, commits and tags. `feat` bumps the minor
-version, `fix` the patch; use `npm run release -- --release-as 1.0.0` to choose one.
-`git push --follow-tags origin main` then runs `.github/workflows/release.yml`, which builds macOS and
-Windows installers and attaches them to a draft GitHub release.
+On every push to `main`, [release-please](https://github.com/googleapis/release-please) keeps a
+release PR open that bumps the version in `package.json`, `tauri.conf.json` and `Cargo.toml` and adds
+the `feat`/`fix` commits to `CHANGELOG.md`. `feat` bumps the minor version, `fix` the patch; a
+`Release-As: 1.0.0` line in a commit body picks the version. Merging the PR tags the commit, creates
+the GitHub release with the changelog as notes, and builds the macOS and Windows installers into it
+(`.github/workflows/release.yml`).
 
 `npm run dev` also runs the UI in a plain browser with a mock backend. It loads
 `public/demo.json`, which you generate from the test session with

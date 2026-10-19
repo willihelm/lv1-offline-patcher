@@ -2,11 +2,28 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
+  # Keeps a release PR open that bumps the version and updates CHANGELOG.md.
+  # Merging it tags the commit and creates the GitHub release.
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+
+  # Tags created with GITHUB_TOKEN don't trigger other workflows, so the installers are built here.
   build:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
     permissions:
       contents: write
     strategy:
@@ -20,6 +37,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
@@ -35,7 +54,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: LV1 Offline Patcher ${{ github.ref_name }}
-          releaseDraft: true
+          tagName: ${{ needs.release-please.outputs.tag_name }}
           args: ${{ matrix.args }}
