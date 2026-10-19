@@ -6,7 +6,7 @@ src-tauri/gen/
 public/demo.json
 .playwright-mcp/
 .DS_Store
-# Show files (35 MB each, local test data)
+# Showfiles may contain real show data; only the test session is tracked
 *.emo
 *.db
 *.emo-wal
