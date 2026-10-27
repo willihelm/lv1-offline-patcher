@@ -229,3 +229,64 @@ export function clearRowsOps(grid: Grid, rows: Iterable<number>): PatchOp[] {
   }
   return ops;
 }
+
+/**
+ * Ops that repatch every channel direct out on `device` straight from the device input that feeds
+ * the channel (Input A, else Input B), bypassing the mixer. A mono channel with a stereo direct out
+ * sends its one input to both sides. `skipped` lists direct outs whose channel has no input patch.
+ */
+export function directToDeviceOps(show: ShowState, device: Device) {
+  const inputOf = new Map(
+    show.routes.filter((r) => r.src.cluster === CLUSTER.HW_IN).map((r) => [dstKey(r.dst), r.src] as const),
+  );
+  const ops: PatchOp[] = [];
+  const skipped: string[] = [];
+  for (const r of show.routes) {
+    const { src, dst } = r;
+    if (dst.cluster !== CLUSTER.HW_OUT || dst.index !== device.idx || src.cluster !== CLUSTER.INPUT) continue;
+    const width = show.inputs.find((s) => s.cluster === src.cluster && s.index === src.index)?.width ?? 1;
+    const channel = Math.min(src.channel, width - 1);
+    const input = [0, 1]
+      .map((section) => inputOf.get(dstKey({ cluster: src.cluster, index: src.index, section, channel })))
+      .find(Boolean);
+    if (input) ops.push({ dst, src: input });
+    else skipped.push(srcLabel(show, src));
+  }
+  return { ops, skipped };
+}
+
+/**
+ * Reverse of directToDeviceOps: repatches every device input on `device` as the direct out of the
+ * channel it feeds (Input A before Input B, else the lowest channel number). For a mono channel with
+ * a stereo direct out, the first output gets L and a second one from the same input gets R.
+ * `skipped` lists device inputs that feed no channel.
+ */
+export function deviceToDirectOps(show: ShowState, device: Device) {
+  const channelsOf = new Map<string, Dst[]>();
+  const inputs = show.routes
+    .filter((r) => r.src.cluster === CLUSTER.HW_IN && r.dst.cluster === CLUSTER.INPUT)
+    .sort((a, b) => a.dst.section - b.dst.section || a.dst.index - b.dst.index || a.dst.channel - b.dst.channel);
+  for (const r of inputs) channelsOf.set(key(r.src), [...(channelsOf.get(key(r.src)) ?? []), r.dst]);
+  const width = (strips: Strip[], index: number) =>
+    strips.find((s) => s.cluster === CLUSTER.INPUT && s.index === index)?.width ?? 1;
+  const ops: PatchOp[] = [];
+  const skipped: string[] = [];
+  const used = new Set<string>();
+  const outs = show.routes
+    .filter((r) => r.dst.cluster === CLUSTER.HW_OUT && r.dst.index === device.idx && r.src.cluster === CLUSTER.HW_IN)
+    .sort((a, b) => a.dst.channel - b.dst.channel);
+  for (const { src, dst } of outs) {
+    const ch = channelsOf.get(key(src))?.[0];
+    if (!ch) {
+      skipped.push(srcLabel(show, src));
+      continue;
+    }
+    let direct = { cluster: CLUSTER.INPUT, index: ch.index, channel: ch.channel };
+    // mono input, stereo direct out: L is taken already, so this one becomes R
+    if (width(show.inputs, ch.index) === 1 && width(show.sources, ch.index) === 2 && used.has(key(direct)))
+      direct = { ...direct, channel: 1 };
+    used.add(key(direct));
+    ops.push({ dst, src: direct });
+  }
+  return { ops, skipped };
+}

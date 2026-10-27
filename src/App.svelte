@@ -8,7 +8,7 @@
   import * as api from "./lib/api";
   import PatchGrid from "./lib/PatchGrid.svelte";
   import * as recent from "./lib/recent";
-  import { clearRowsOps, deviceGrid, inputGrid, outputGrid, type PatchView } from "./lib/grid";
+  import { clearRowsOps, deviceGrid, deviceToDirectOps, directToDeviceOps, inputGrid, outputGrid, type PatchView } from "./lib/grid";
   import { Tab } from "./lib/tab.svelte";
   import { CLUSTER, DRIVER_CHANNELS, type Device, type PatchOp, type ShowState } from "./lib/types";
 
@@ -271,6 +271,53 @@
     if (ops.length) apply(ops);
   }
 
+  const conversions = [
+    {
+      label: "Convert Direct Outs to Device to Device",
+      ops: directToDeviceOps,
+      none: "no direct outs to convert",
+      done: (n: number) => `${n} direct out${n > 1 ? "s" : ""} converted to device to device`,
+      skip: "no input patch",
+    },
+    {
+      label: "Convert Device to Device to Direct Outs",
+      ops: deviceToDirectOps,
+      none: "no device to device patches to convert",
+      done: (n: number) => `${n} device to device patch${n > 1 ? "es" : ""} converted to direct outs`,
+      skip: "feeds no channel",
+    },
+  ];
+
+  /** repatch the outputs of `d`: direct outs from/to the device inputs that feed their channels */
+  function convert(d: Device, conv: (typeof conversions)[number]) {
+    const t = tab;
+    const { ops, skipped } = conv.ops(show!, d);
+    const rest = skipped.length ? `; ${skipped.length} skipped, ${conv.skip}: ${skipped.join(", ")}` : "";
+    if (!ops.length) {
+      t.message = `${d.name}: ${conv.none}${rest}`;
+      return;
+    }
+    run(t, async () => {
+      const s = await api.patch(t.id!, ops);
+      t.message = `${d.name}: ${conv.done(ops.length)}${rest}`;
+      return s;
+    });
+  }
+
+  /** right-click menu of a device */
+  async function deviceMenu(e: MouseEvent, d: Device) {
+    e.preventDefault();
+    if (!d.outs || busy) return;
+    if (!isTauri()) {
+      const conv = conversions.find((c) => window.confirm(`${d.name}: ${c.label}?`));
+      if (conv) convert(d, conv);
+      return;
+    }
+    const items = conversions.map((c) => MenuItem.new({ text: c.label, action: () => convert(d, c) }));
+    const menu = await Menu.new({ items: await Promise.all(items) });
+    await menu.popup();
+  }
+
   const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
   function keydown(e: KeyboardEvent) {
@@ -449,7 +496,12 @@
         <div class="devrow">
           {#each colDevices as d (d.idx)}
             <div class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx}>
-              <button class="dsel" title={d.name} onclick={() => (tab.devIdx = d.idx)}>
+              <button
+                class="dsel"
+                title={d.outs ? `${d.name}\nRight-click to convert between direct outs and device to device` : d.name}
+                onclick={() => (tab.devIdx = d.idx)}
+                oncontextmenu={(e) => deviceMenu(e, d)}
+              >
                 <div class="dhead">{deviceNo(d)} {d.name}</div>
                 <div class="dbody">
                   <span class="kind">{d.isDaw ? "DAW" : d.kind}</span>

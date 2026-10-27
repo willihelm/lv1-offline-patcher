@@ -10,6 +10,13 @@ without the I/O hardware being online. The UI follows LV1's Patch page:
   → device outputs. The Source column sets the output source: INP, PRE, PST or PSP
 - **Device to Device**: device inputs → device outputs
 
+Right-click a device (e.g. a DAW) and choose **Convert Direct Outs to Device to Device** to repatch
+all channel direct outs on it straight from the device inputs that feed those channels (Input A,
+or Input B if A is empty), bypassing the mixer. Channels without an input patch are skipped and listed in
+the status bar. **Convert Device to Device to Direct Outs** goes the other way: every device input
+patched to the device becomes the direct out of the channel it feeds (if several channels use it:
+Input A first, then the lowest channel number). Each conversion is one undo step.
+
 In the Input view, the rows above the column numbers show the preamps of the selected I/O device.
 Click **48V** to switch phantom power. Turn a gain knob by dragging up/down (Shift for fine),
 with the mouse wheel or the arrow keys. Double-click (or Enter) types a value: Enter confirms,
