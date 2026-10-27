@@ -1,23 +1,23 @@
 <script lang="ts">
   import { isTauri } from "@tauri-apps/api/core";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
+  import { getAllWebviewWindows, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { ask, open, save as saveDialog } from "@tauri-apps/plugin-dialog";
+  import { onMount } from "svelte";
   import * as api from "./lib/api";
   import PatchGrid from "./lib/PatchGrid.svelte";
   import * as recent from "./lib/recent";
-  import { clearRowsOps, deviceGrid, inputGrid, outputGrid, type OutputTab, type PatchView } from "./lib/grid";
+  import { clearRowsOps, deviceGrid, inputGrid, outputGrid, type PatchView } from "./lib/grid";
+  import { Tab } from "./lib/tab.svelte";
   import { CLUSTER, DRIVER_CHANNELS, type Device, type PatchOp, type ShowState } from "./lib/types";
 
-  let show = $state<ShowState | null>(null);
-  let view = $state<PatchView>("input");
-  let section = $state(0);
-  let outputTab = $state<OutputTab>("direct");
-  let devIdx = $state(-1);
-  let srcDevIdx = $state(-1);
+  let tabs = $state<Tab[]>([new Tab()]);
+  let activeKey = $state(tabs[0].key);
+  const tab = $derived(tabs.find((t) => t.key === activeKey) ?? tabs[0]);
+  const show = $derived(tab.show);
   let cell = $state(32);
-  let selected = $state(new Set<number>());
   let hover = $state<{ r: number; c: number } | null>(null);
-  let message = $state("");
   let busy = $state(false);
   let dragging = $state(false);
   let recentShows = $state(recent.load());
@@ -29,21 +29,22 @@
   ];
 
   // devices that have channels in the direction the column side of the matrix needs
-  const colDevices = $derived(show?.devices.filter((d) => (view === "input" ? d.ins : d.outs) > 0) ?? []);
+  const colDevices = $derived(show?.devices.filter((d) => (tab.view === "input" ? d.ins : d.outs) > 0) ?? []);
   const rowDevices = $derived(show?.devices.filter((d) => d.ins > 0) ?? []);
-  const device = $derived(colDevices.find((d) => d.idx === devIdx) ?? colDevices[0]);
-  const srcDevice = $derived(rowDevices.find((d) => d.idx === srcDevIdx) ?? rowDevices[0]);
+  const device = $derived(colDevices.find((d) => d.idx === tab.devIdx) ?? colDevices[0]);
+  const srcDevice = $derived(rowDevices.find((d) => d.idx === tab.srcDevIdx) ?? rowDevices[0]);
 
   const grid = $derived.by(() => {
     if (!show || !device) return null;
-    if (view === "input") return inputGrid(show, device, section);
-    if (view === "output") return outputGrid(show, device, outputTab);
+    if (tab.view === "input") return inputGrid(show, device, tab.section);
+    if (tab.view === "output") return outputGrid(show, device, tab.outputTab);
     return srcDevice ? deviceGrid(show, srcDevice, device) : null;
   });
 
   const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
   const dirName = (p: string) => p.slice(0, p.length - baseName(p).length).replace(/[\\/]$/, "");
   const fileName = $derived(show ? baseName(show.path) : "");
+  const tabTitle = (t: Tab) => (t.show ? baseName(t.show.path) : "New Tab");
   const status = $derived.by(() => {
     if (!grid || !hover || !device) return "";
     const row = grid.rows[hover.r];
@@ -51,38 +52,106 @@
     if (!row || !col || row.heading !== undefined) return "";
     const rowText = `${row.number}  ${row.label} ${row.side}`.trim();
     const port = [device.name, col.port.minor, col.port.label].filter(Boolean).join(" ");
-    if (view === "input") return `${port}  →  ${rowText}${section ? "  (Input B)" : ""}`;
+    if (tab.view === "input") return `${port}  →  ${rowText}${tab.section ? "  (Input B)" : ""}`;
     return `${rowText}  →  ${port}${col.note ? `   (currently: ${col.note})` : ""}`;
   });
 
-  // a new matrix starts with an empty row selection
+  // a new matrix starts with an empty row selection; switching tabs keeps the tab's selection
+  let selectionKey = 0;
   $effect(() => {
-    void view, section, outputTab, device?.idx, srcDevice?.idx;
-    selected = new Set();
+    void tab.view, tab.section, tab.outputTab, device?.idx, srcDevice?.idx;
+    if (selectionKey === tab.key) tab.selected = new Set();
+    selectionKey = tab.key;
   });
 
-  async function run(task: () => Promise<ShowState | void>) {
+  $effect(() => {
+    const title = show ? `${fileName}${show.dirty ? " •" : ""} — LV1 Offline Patcher` : "LV1 Offline Patcher";
+    document.title = title;
+    if (isTauri()) getCurrentWebviewWindow().setTitle(title);
+  });
+
+  /** Run a backend command for tab `t`; errors end up in that tab's status bar. */
+  async function run(t: Tab, task: () => Promise<ShowState | void>) {
     busy = true;
     try {
       const s = await task();
-      if (s) show = s;
+      if (s) t.show = s;
     } catch (e) {
-      message = `Error: ${e}`;
+      t.message = `Error: ${e}`;
     } finally {
       busy = false;
     }
   }
 
-  async function openFile() {
-    let path: string | null = "demo";
-    if (isTauri()) {
-      path = await open({ filters: [{ name: "LV1 Showfile", extensions: ["emo"] }] });
-    }
-    if (path) await openPath(path);
+  /** run a command on the session of the active tab */
+  const runShow = (task: (id: number) => Promise<ShowState>) => {
+    const t = tab;
+    if (t.id !== null) run(t, () => task(t.id!));
+  };
+
+  function addTab(t = new Tab()) {
+    tabs.push(t);
+    activeKey = t.key;
+    return t;
   }
 
+  /** add a session moved or opened into this window, unless it is here already */
+  function addSession(s: api.Session) {
+    const existing = tabs.find((t) => t.id === s.id);
+    if (existing) return (activeKey = existing.key);
+    // an untouched window gives its welcome tab to the session
+    if (tabs.length === 1 && !tabs[0].show) tabs[0].load(s);
+    else addTab(new Tab(s));
+    activeKey = tabs.find((t) => t.id === s.id)!.key;
+  }
+
+  function removeTab(t: Tab) {
+    const i = tabs.indexOf(t);
+    if (i < 0) return;
+    tabs.splice(i, 1);
+    if (!tabs.length) {
+      // like a browser: closing the last tab closes the window
+      if (isTauri()) getCurrentWebviewWindow().destroy();
+      tabs.push(new Tab());
+    }
+    if (activeKey === t.key) activeKey = tabs[Math.min(i, tabs.length - 1)].key;
+  }
+
+  const confirm = (text: string, okLabel: string) =>
+    isTauri() ? ask(text, { title: "Unsaved changes", kind: "warning", okLabel }) : Promise.resolve(window.confirm(text));
+
+  async function closeTab(t: Tab) {
+    if (t.show?.dirty) {
+      activeKey = t.key;
+      const ok = await confirm(`"${tabTitle(t)}" has unsaved changes. Close it anyway?`, "Close Tab");
+      if (!ok) return;
+    }
+    if (t.id !== null) api.closeSession(t.id).catch(() => {});
+    removeTab(t);
+  }
+
+  function closeWindow() {
+    if (isTauri()) getCurrentWebviewWindow().close();
+    else window.close();
+  }
+
+  function cycleTab(step: number) {
+    const i = tabs.indexOf(tab);
+    activeKey = tabs[(i + step + tabs.length) % tabs.length].key;
+  }
+
+  async function openFile() {
+    let paths: string[] | null = ["demo"];
+    if (isTauri()) {
+      paths = await open({ multiple: true, filters: [{ name: "LV1 Showfile", extensions: ["emo"] }] });
+    }
+    for (const p of paths ?? []) await openPath(p);
+  }
+
+  /** open into the active tab if it is a welcome page, otherwise into a new tab */
   async function openPath(path: string) {
-    await run(async () => {
+    const t = tab;
+    await run(t, async () => {
       let s;
       try {
         s = await api.openShow(path);
@@ -91,28 +160,33 @@
         throw e;
       }
       recentShows = recent.add(path);
-      message = s.lv1Open
+      if (!s) return; // already open, its tab got activated
+      const target = t.show || !tabs.includes(t) ? addTab() : t;
+      target.load(s);
+      activeKey = target.key;
+      target.message = s.show.lv1Open
         ? "Warning: this show seems to be open in LV1. Close it there before saving."
         : `Opened ${path}`;
-      return s;
     });
   }
 
   async function saveFile(saveAs: boolean) {
-    if (!show) return;
+    const t = tab;
+    if (!t.show || t.id === null) return;
+    const id = t.id;
     let target: string | null = null;
     if (saveAs) {
       if (!isTauri()) return;
       target = await saveDialog({
-        defaultPath: show.path.replace(/\.emo$/i, "-patched.emo"),
+        defaultPath: t.show.path.replace(/\.emo$/i, "-patched.emo"),
         filters: [{ name: "LV1 Showfile", extensions: ["emo"] }],
       });
       if (!target) return;
     }
-    await run(async () => {
+    await run(t, async () => {
       let res;
       try {
-        res = await api.save(target, false);
+        res = await api.save(id, target, false);
       } catch (e) {
         if (e !== "LV1_OPEN") throw e;
         const ok = await ask(
@@ -120,77 +194,228 @@
           { title: "LV1 is running", kind: "warning" },
         );
         if (!ok) return;
-        res = await api.save(target, true);
+        res = await api.save(id, target, true);
       }
-      message = res.backup ? `Saved. Backup: ${res.backup}` : `Saved ${target ?? show!.path}`;
+      t.message = res.backup ? `Saved. Backup: ${res.backup}` : `Saved ${target ?? t.show!.path}`;
       return res.show;
     });
   }
 
+  function command(c: string) {
+    if (c === "new-tab") addTab();
+    else if (c === "new-window") api.newWindow().catch((e) => (tab.message = `Error: ${e}`));
+    else if (c === "open") openFile();
+    else if (c === "close-tab") closeTab(tab);
+    else if (c === "close-window") closeWindow();
+    else if (c === "save") saveFile(false);
+    else if (c === "save-as") saveFile(true);
+    else if (c === "next-tab") cycleTab(1);
+    else if (c === "prev-tab") cycleTab(-1);
+  }
+
   const isShowfile = (p: string) => /\.emo$/i.test(p);
 
-  // files dropped from Finder/Explorer only reach us through Tauri's native drag-drop event
-  $effect(() => {
+  onMount(() => {
     if (!isTauri()) return;
-    const unlisten = getCurrentWebview().onDragDropEvent(({ payload }) => {
-      if (payload.type === "enter") dragging = payload.paths.some(isShowfile);
-      else if (payload.type === "leave") dragging = false;
-      else if (payload.type === "drop") {
-        dragging = false;
-        const path = payload.paths.find(isShowfile);
-        if (!path) message = "Drop a Waves LV1 showfile (.emo) to open it.";
-        else if (!busy) openPath(path);
-      }
-    });
-    return () => void unlisten.then((f) => f());
+    const win = getCurrentWebviewWindow();
+    const unlisten = [
+      // files dropped from Finder/Explorer only reach us through Tauri's native drag-drop event
+      getCurrentWebview().onDragDropEvent(async ({ payload }) => {
+        if (payload.type === "enter") dragging = payload.paths.some(isShowfile);
+        else if (payload.type === "leave") dragging = false;
+        else if (payload.type === "drop") {
+          dragging = false;
+          const paths = payload.paths.filter(isShowfile);
+          if (!paths.length) tab.message = "Drop a Waves LV1 showfile (.emo) to open it.";
+          else if (!busy) for (const p of paths) await openPath(p);
+        }
+      }),
+      win.listen<string>("menu", (e) => command(e.payload)),
+      win.listen<number>("activate-session", (e) => {
+        const t = tabs.find((t) => t.id === e.payload);
+        if (t) activeKey = t.key;
+      }),
+      win.listen<api.Session>("session-added", (e) => addSession(e.payload)),
+      win.onCloseRequested(async (e) => {
+        const dirty = tabs.filter((t) => t.show?.dirty);
+        if (!dirty.length) return;
+        const names = dirty.map((t) => `"${tabTitle(t)}"`).join(", ");
+        if (!(await confirm(`${names} ${dirty.length > 1 ? "have" : "has"} unsaved changes. Close the window anyway?`, "Close Window")))
+          e.preventDefault();
+      }),
+    ];
+    // tabs this window was created with (a tab dragged out of another window)
+    api.windowSessions().then((list) => list.forEach(addSession));
+    return () => unlisten.forEach((u) => u.then((f) => f()));
   });
 
-  const apply = (ops: PatchOp[]) => run(() => api.patch(ops));
+  const apply = (ops: PatchOp[]) => runShow((id) => api.patch(id, ops));
 
   function setDriverChannels(d: Device, count: number) {
+    const t = tab;
     const lost = show!.routes.filter(
       (r) =>
         (r.src.cluster === CLUSTER.HW_IN && r.src.index === d.idx && r.src.channel >= count) ||
         (r.dst.cluster === CLUSTER.HW_OUT && r.dst.index === d.idx && r.dst.channel >= count),
     ).length;
-    run(async () => {
-      const s = await api.setDriverChannels(d.idx, count);
-      message = `${d.name}: ${count} driver channels` + (lost ? `, ${lost} patch${lost > 1 ? "es" : ""} removed` : "");
+    run(t, async () => {
+      const s = await api.setDriverChannels(t.id!, d.idx, count);
+      t.message = `${d.name}: ${count} driver channels` + (lost ? `, ${lost} patch${lost > 1 ? "es" : ""} removed` : "");
       return s;
     });
   }
 
   function deleteSelected() {
-    if (!grid || !selected.size) return;
-    const ops = clearRowsOps(grid, selected);
+    if (!grid || !tab.selected.size) return;
+    const ops = clearRowsOps(grid, tab.selected);
     if (ops.length) apply(ops);
   }
+
+  const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
   function keydown(e: KeyboardEvent) {
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
+    // file and tab shortcuts; in the macOS app the menu handles them and sends a "menu" event
+    const menuKeys: Record<string, string> = { t: "new-tab", n: "new-window", o: "open", w: "close-tab", s: "save" };
+    if (mod && !e.altKey && menuKeys[k] && !(mac && isTauri())) {
+      command(e.shiftKey ? ({ w: "close-window", s: "save-as" } as Record<string, string>)[k] ?? "" : menuKeys[k]);
+    } else if (e.ctrlKey && e.key === "Tab") cycleTab(e.shiftKey ? -1 : 1);
+    else if (e.ctrlKey && !mac && (e.key === "PageDown" || e.key === "PageUp")) cycleTab(e.key === "PageDown" ? 1 : -1);
+    else if (mod && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+      activeKey = (e.key === "9" ? tabs[tabs.length - 1] : tabs[+e.key - 1] ?? tab).key;
+    }
     // typing a gain value: Backspace/Delete edit the text, not the patch
-    if (e.target instanceof HTMLInputElement && !(mod && (k === "o" || k === "s"))) return;
-    if (mod && k === "o") openFile();
-    else if (mod && k === "s") saveFile(e.shiftKey);
-    else if (mod && k === "z" && show) run(e.shiftKey ? api.redo : api.undo);
-    else if (mod && k === "y" && show) run(api.redo);
+    else if (e.target instanceof HTMLInputElement) return;
+    else if (mod && k === "z" && show) runShow(e.shiftKey ? api.redo : api.undo);
+    else if (mod && k === "y" && show) runShow(api.redo);
     else if ((e.key === "Delete" || e.key === "Backspace") && !mod) deleteSelected();
     else return;
     e.preventDefault();
   }
 
-  const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
   const keys = mac
-    ? { undo: "⌘Z", redo: "⇧⌘Z", save: "⌘S", saveAs: "⇧⌘S" }
-    : { undo: "Ctrl+Z", redo: "Ctrl+Y", save: "Ctrl+S", saveAs: "Ctrl+Shift+S" };
+    ? { undo: "⌘Z", redo: "⇧⌘Z", save: "⌘S", saveAs: "⇧⌘S", newTab: "⌘T", closeTab: "⌘W" }
+    : { undo: "Ctrl+Z", redo: "Ctrl+Y", save: "Ctrl+S", saveAs: "Ctrl+Shift+S", newTab: "Ctrl+T", closeTab: "Ctrl+W" };
 
   const deviceNo = (d: Device) => `${d.idx + 1}.`;
+
+  // Reordering by drag. Move/up are watched on the window, not the tab: the tab's element is
+  // moved in the DOM while dragging, which would drop a pointer capture on it.
+  let tabbar = $state<HTMLElement>();
+  let draggedKey = $state<number | null>(null);
+
+  function tabPointerDown(e: PointerEvent, t: Tab) {
+    if (e.button !== 0) return;
+    activeKey = t.key;
+    if ((e.target as Element).closest("button")) return;
+    const startX = e.clientX;
+    const move = (ev: PointerEvent) => {
+      if (draggedKey === null && Math.abs(ev.clientX - startX) < 5) return;
+      draggedKey = t.key;
+      const others = [...tabbar!.querySelectorAll<HTMLElement>(".tab")].filter((el) => el.dataset.key !== `${t.key}`);
+      const index = others.filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left + r.width / 2 < ev.clientX;
+      }).length;
+      const from = tabs.indexOf(t);
+      if (from >= 0 && from !== index) {
+        tabs.splice(from, 1);
+        tabs.splice(index, 0, t);
+      }
+    };
+    const up = () => {
+      draggedKey = null;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  function moveTab(t: Tab, step: number) {
+    const i = tabs.indexOf(t);
+    const j = i + step;
+    if (j < 0 || j >= tabs.length) return;
+    tabs.splice(i, 1);
+    tabs.splice(j, 0, t);
+  }
+
+  /** move a tab's session into another window (`null`: a new one) */
+  async function moveToWindow(t: Tab, target: string | null) {
+    if (t.id === null) return;
+    try {
+      await api.moveSession(t.id, target);
+      removeTab(t);
+    } catch (e) {
+      t.message = `Error: ${e}`;
+    }
+  }
+
+  /** native menu of a tab: order, move to another window, close */
+  async function tabMenu(e: MouseEvent, t: Tab) {
+    e.preventDefault();
+    if (!isTauri()) return;
+    const self = getCurrentWebviewWindow().label;
+    const others = await Promise.all(
+      (await getAllWebviewWindows()).filter((w) => w.label !== self).map(async (w) => ({ label: w.label, title: await w.title() })),
+    );
+    const i = tabs.indexOf(t);
+    const hasShow = t.id !== null;
+    const item = (text: string, action: () => void, enabled = true) => MenuItem.new({ text, action, enabled });
+    const menu = await Menu.new({
+      items: [
+        await item("Move Tab Left", () => moveTab(t, -1), i > 0),
+        await item("Move Tab Right", () => moveTab(t, 1), i < tabs.length - 1),
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        await item("Move to New Window", () => moveToWindow(t, null), hasShow && tabs.length > 1),
+        ...(await Promise.all(others.map((w) => item(`Move to “${w.title}”`, () => moveToWindow(t, w.label), hasShow)))),
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        await item("Close Tab", () => closeTab(t)),
+      ],
+    });
+    await menu.popup();
+  }
 </script>
 
-<svelte:window onkeydown={keydown} />
+<svelte:window onkeydown={keydown} onstorage={() => (recentShows = recent.load())} />
 
 <main>
+  <nav class="tabbar" class:dragging={draggedKey !== null} bind:this={tabbar}>
+    {#each tabs as t (t.key)}
+      <div
+        class="tab"
+        class:active={t.key === tab.key}
+        role="tab"
+        tabindex="-1"
+        aria-selected={t.key === tab.key}
+        title={t.show?.path}
+        class:dragged={t.key === draggedKey}
+        data-key={t.key}
+        onpointerdown={(e) => tabPointerDown(e, t)}
+        ondragstart={(e) => e.preventDefault()}
+        onauxclick={(e) => e.button === 1 && closeTab(t)}
+        oncontextmenu={(e) => tabMenu(e, t)}
+      >
+        <span class="tabtitle">{tabTitle(t)}</span>
+        {#if t.show?.dirty}<span class="dirty" aria-label="unsaved changes"></span>{/if}
+        {#if isTauri()}
+          <button class="tabmenu" title="Move Tab…" onclick={(e) => tabMenu(e, t)}>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5.5v-3h3M2.5 2.5l4 4M7 3h6.5v10.5H3V9" /></svg>
+          </button>
+        {/if}
+        <button class="tabclose" title="Close Tab ({keys.closeTab})" onclick={() => closeTab(t)}>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+        </button>
+      </div>
+    {/each}
+    <button class="newtab" title="New Tab ({keys.newTab})" onclick={() => addTab()}>
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+    </button>
+  </nav>
+
   <header class="topbar">
     <div class="brand">LV1 <span>Offline Patcher</span></div>
     <button onclick={openFile} disabled={busy}>Open…</button>
@@ -199,8 +424,8 @@
         <strong>{fileName}{show.dirty ? "*" : ""}</strong>
         <span>{show.snapshot}</span>
       </div>
-      <button onclick={() => run(api.undo)} disabled={!show.canUndo || busy} title="Undo ({keys.undo})">Undo</button>
-      <button onclick={() => run(api.redo)} disabled={!show.canRedo || busy} title="Redo ({keys.redo})">Redo</button>
+      <button onclick={() => runShow(api.undo)} disabled={!show.canUndo || busy} title="Undo ({keys.undo})">Undo</button>
+      <button onclick={() => runShow(api.redo)} disabled={!show.canRedo || busy} title="Redo ({keys.redo})">Redo</button>
       <div class="spacer"></div>
       {#if show.lv1Open}<span class="warn">LV1 has this file open</span>{/if}
       <button class="primary" onclick={() => saveFile(false)} disabled={!show.dirty || busy} title="Save ({keys.save})">
@@ -216,7 +441,7 @@
         <div class="caption">Select Patch View</div>
         <div class="row">
           {#each views as [v, label]}
-            <button class="big" class:active={view === v} onclick={() => (view = v)}>{label}</button>
+            <button class="big" class:active={tab.view === v} onclick={() => (tab.view = v)}>{label}</button>
           {/each}
         </div>
       </div>
@@ -224,12 +449,12 @@
         <div class="devrow">
           {#each colDevices as d (d.idx)}
             <div class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx}>
-              <button class="dsel" title={d.name} onclick={() => (devIdx = d.idx)}>
+              <button class="dsel" title={d.name} onclick={() => (tab.devIdx = d.idx)}>
                 <div class="dhead">{deviceNo(d)} {d.name}</div>
                 <div class="dbody">
                   <span class="kind">{d.isDaw ? "DAW" : d.kind}</span>
                   {#if !d.isDaw}
-                    <span class="io">{view === "input" ? d.inPorts.length + " in" : d.outPorts.length + " out"}</span>
+                    <span class="io">{tab.view === "input" ? d.inPorts.length + " in" : d.outPorts.length + " out"}</span>
                   {/if}
                 </div>
               </button>
@@ -253,19 +478,19 @@
 
     <section class="work">
       <aside class="panel side">
-        {#if view === "input"}
-          <button class="big" class:active={section === 0} onclick={() => (section = 0)}>Input A</button>
-          <button class="big" class:active={section === 1} onclick={() => (section = 1)}>Input B</button>
-        {:else if view === "d2d"}
+        {#if tab.view === "input"}
+          <button class="big" class:active={tab.section === 0} onclick={() => (tab.section = 0)}>Input A</button>
+          <button class="big" class:active={tab.section === 1} onclick={() => (tab.section = 1)}>Input B</button>
+        {:else if tab.view === "d2d"}
           <div class="caption small">From</div>
           {#each rowDevices as d (d.idx)}
-            <button class="srcdev" class:daw={d.isDaw} class:active={d.idx === srcDevice?.idx} title={d.name} onclick={() => (srcDevIdx = d.idx)}>
+            <button class="srcdev" class:daw={d.isDaw} class:active={d.idx === srcDevice?.idx} title={d.name} onclick={() => (tab.srcDevIdx = d.idx)}>
               {deviceNo(d)} {d.name}
             </button>
           {/each}
         {:else}
-          <button class="big" class:active={outputTab === "direct"} onclick={() => (outputTab = "direct")}>Direct</button>
-          <button class="big" class:active={outputTab === "busses"} onclick={() => (outputTab = "busses")}>
+          <button class="big" class:active={tab.outputTab === "direct"} onclick={() => (tab.outputTab = "direct")}>Direct</button>
+          <button class="big" class:active={tab.outputTab === "busses"} onclick={() => (tab.outputTab = "busses")}>
             Mix{"\n"}Busses
           </button>
         {/if}
@@ -286,13 +511,13 @@
             </button>
           </div>
           <div class="where">
-            <strong>{view === "input" ? `Input ${section ? "B" : "A"}` : view === "output" ? "Output" : "Device to Device"}</strong>
+            <strong>{tab.view === "input" ? `Input ${tab.section ? "B" : "A"}` : tab.view === "output" ? "Output" : "Device to Device"}</strong>
             <span>
-              {view === "input" ? "From Device to Channel" : view === "output" ? "From Channel to Device" : "From Device to Device"}
+              {tab.view === "input" ? "From Device to Channel" : tab.view === "output" ? "From Channel to Device" : "From Device to Device"}
             </span>
           </div>
           <svg class="direction" viewBox="0 0 32 32" aria-hidden="true">
-            {#if view === "input"}
+            {#if tab.view === "input"}
               <path d="M27 4v12a4 4 0 0 1-4 4H6M11 15l-5 5 5 5" />
             {:else}
               <path d="M5 28V16a4 4 0 0 1 4-4h17M21 7l5 5-5 5" />
@@ -306,11 +531,11 @@
             <PatchGrid
               {grid}
               {cell}
-              bind:selected
+              bind:selected={tab.selected}
               bind:hover
               onpatch={apply}
-              ontap={(cluster, index, tap) => run(() => api.setTap(cluster, index, tap))}
-              onpreamp={(idx, channel, gain, phantom) => run(() => api.setPreamp(idx, channel, gain, phantom))}
+              ontap={(cluster, index, tap) => runShow((id) => api.setTap(id, cluster, index, tap))}
+              onpreamp={(idx, channel, gain, phantom) => runShow((id) => api.setPreamp(id, idx, channel, gain, phantom))}
               corner={tools}
             />
           </div>
@@ -361,7 +586,7 @@
   {/if}
 
   <footer class="statusbar">
-    <span>{status || message}</span>
+    <span>{status || tab.message}</span>
     {#if grid}<span class="count">{grid.patched.size} patched in view</span>{/if}
   </footer>
 </main>
@@ -369,11 +594,118 @@
 <style>
   main {
     display: grid;
-    grid-template-rows: auto auto 1fr auto;
+    grid-template-rows: auto auto auto 1fr auto;
     height: 100vh;
     gap: 8px;
     padding: 8px;
     box-sizing: border-box;
+  }
+  .tabbar {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    margin: -8px -8px 0;
+    padding: 6px 8px 0;
+    background: #111;
+    border-bottom: 1px solid #333;
+    min-width: 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .tab {
+    flex: 0 1 220px;
+    min-width: 72px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 6px 0 12px;
+    box-sizing: border-box;
+    border-radius: 8px 8px 0 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    cursor: default;
+  }
+  .tab:hover {
+    background: #1f1f21;
+  }
+  .tabbar.dragging .tab {
+    cursor: grabbing;
+  }
+  .tab.dragged {
+    background: #2c2c2f;
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+  }
+  .tab.active {
+    background: var(--bg);
+    color: var(--text);
+    box-shadow: inset 0 2px var(--accent);
+  }
+  .tabtitle {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dirty {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .tabmenu,
+  .tabclose,
+  .newtab {
+    flex: none;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-dim);
+  }
+  .tabmenu {
+    visibility: hidden;
+  }
+  .tab:hover .tabmenu,
+  .tab.active .tabmenu {
+    visibility: visible;
+  }
+  .tabmenu,
+  .tabclose {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+  }
+  .newtab {
+    width: 28px;
+    height: 28px;
+    margin: 0 0 2px 4px;
+    border-radius: 6px;
+  }
+  .tabmenu:hover,
+  .tabclose:hover,
+  .newtab:hover {
+    color: var(--text);
+    background: #3a3a3d;
+  }
+  .tabmenu svg,
+  .tabclose svg,
+  .newtab svg {
+    width: 10px;
+    height: 10px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  .newtab svg {
+    width: 12px;
+    height: 12px;
   }
   .topbar {
     display: flex;
@@ -624,7 +956,7 @@
     color: var(--text-dim);
   }
   .welcome {
-    grid-row: 2 / 4;
+    grid-row: 3 / 5;
     align-self: center;
     justify-self: center;
     display: grid;
