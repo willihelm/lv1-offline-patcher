@@ -1,7 +1,16 @@
 // Browser-only stand-in for the Rust backend, used for UI development via `npm run dev`.
 // Loads /demo.json (a ShowState dump, see README) and mimics patch/undo/redo.
+// Each "open" creates a new session with its own copy, so several tabs can be tried out.
 import type { PatchOp, Route, ShowState } from "./types";
 
+interface MockSession {
+  show: ShowState;
+  undoStack: Route[][];
+  redoStack: Route[][];
+}
+
+const sessions = new Map<number, MockSession>();
+let nextId = 0;
 let show: ShowState | null = null;
 let undoStack: Route[][] = [];
 let redoStack: Route[][] = [];
@@ -19,11 +28,36 @@ export async function invoke<T>(cmd: string, args: Record<string, any>): Promise
     case "open_show": {
       const res = await fetch("/demo.json");
       if (!res.ok) throw "Mock backend: public/demo.json not found";
-      show = await res.json();
-      undoStack = [];
-      redoStack = [];
-      break;
+      const id = ++nextId;
+      const s: ShowState = await res.json();
+      s.path = s.path.replace(/(\.emo)?$/i, ` ${id}$1`);
+      sessions.set(id, { show: s, undoStack: [], redoStack: [] });
+      return { id, show: { ...s, canUndo: false, canRedo: false, dirty: false } } as T;
     }
+    case "window_sessions":
+      return [] as T;
+    case "close_session":
+      sessions.delete(args.id);
+      return undefined as T;
+    case "new_window":
+      window.open(location.href);
+      return undefined as T;
+    case "move_session":
+      throw "Moving tabs between windows needs the desktop app";
+  }
+  // the session's state lives in the module variables while a command runs
+  const session = sessions.get(args.id);
+  if (!session) throw "Showfile is not open";
+  ({ show, undoStack, redoStack } = session);
+  try {
+    return run<T>(cmd, args);
+  } finally {
+    Object.assign(session, { undoStack, redoStack });
+  }
+}
+
+function run<T>(cmd: string, args: Record<string, any>): T {
+  switch (cmd) {
     case "patch": {
       const s = state();
       undoStack.push(s.routes);

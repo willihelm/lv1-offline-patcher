@@ -23,6 +23,12 @@ toggle), then press **Delete**. ⌘Z / ⇧⌘Z undo and redo, ⌘S saves, ⇧⌘
 (on Windows: Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S).
 Orange text marks patches that come from outside the current matrix (another device or source).
 
+Several showfiles can be open at once, in tabs and windows like in a web browser: ⌘T opens a
+new tab, ⌘N a new window, ⌘W closes a tab (asking if it has unsaved changes), ⌃Tab / ⇧⌘] and
+⌘1–9 switch tabs (on Windows: Ctrl+T, Ctrl+N, Ctrl+W, Ctrl+Tab, Ctrl+1–9). Drag a tab along the
+tab bar to reorder it. The button on a tab (or a right-click) moves it into a new window or into
+another open window. A file that is already open is not opened twice, its tab is shown instead.
+
 ## How it works
 
 The `.emo` file is an SQLite database. The app reads devices, channel names, colors and output
