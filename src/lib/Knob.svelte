@@ -1,7 +1,7 @@
 <script lang="ts">
-  // Gain knob: drag up/down (Shift for fine), mouse wheel or arrow keys to turn, double-click or
-  // Enter to type a value. Turning previews locally and reports one change when it comes to rest,
-  // so a whole drag is a single undo step.
+  // Gain knob: drag up/down (Shift for fine) or arrow keys to turn, double-click or Enter to
+  // type a value; the mouse wheel scrolls the list. Turning previews locally and reports one
+  // change when it comes to rest, so a whole drag is a single undo step.
   let {
     value,
     min,
@@ -27,8 +27,6 @@
   let preview = $state<number | null>(null);
   let drag: { y: number; from: number; fine: boolean } | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  /** scroll distance not yet turned into a step */
-  let wheelRest = 0;
 
   const shown = $derived(preview ?? value);
   const frac = $derived(max > min ? (shown - min) / (max - min) : 0);
@@ -81,20 +79,6 @@
     commit();
   }
 
-  function wheel(e: WheelEvent) {
-    if (disabled) return;
-    e.preventDefault();
-    // one step per 50 px of scrolling (a mouse wheel notch is ~100 px), so trackpads that send
-    // many small events don't spin the knob
-    const px = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
-    wheelRest -= px / (e.shiftKey ? 200 : 50);
-    const steps = Math.trunc(wheelRest);
-    if (steps) {
-      wheelRest -= steps;
-      nudge(steps * step);
-    }
-  }
-
   function key(e: KeyboardEvent) {
     if (disabled) return;
     const big = e.shiftKey ? 6 : step;
@@ -129,7 +113,6 @@
   onpointermove={move}
   onpointerup={up}
   onpointercancel={up}
-  onwheel={wheel}
   onkeydown={key}
   onblur={commit}
   ondblclick={() => !disabled && onedit()}

@@ -100,16 +100,18 @@ export const CLUSTER = {
   TALKBACK: 8,
   HW_IN: 10,
   HW_OUT: 11,
+  MON: 25,
 } as const;
 
 export const CLUSTER_LABEL: Record<number, string> = {
   0: "Direct Out",
   1: "Group",
-  2: "Aux",
+  2: "FX",
   3: "Main",
   4: "Center",
   5: "Mono",
   6: "Matrix",
   7: "Cue",
   8: "Talkback",
+  25: "Mon",
 };

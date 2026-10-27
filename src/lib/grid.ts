@@ -369,7 +369,7 @@ export function copyOps(show: ShowState, items: CopyItem[]) {
   return [...ops.values()].filter((op) => !same(current.get(dstKey(op.dst)), op.src));
 }
 
-/** e.g. "Ch 1 Kick L", "Aux 2 Wedges", "Talkback" */
+/** e.g. "Ch 1 Kick L", "FX 2 Voc Verb", "Talkback" */
 function stripLabel(show: ShowState, a: { cluster: number; index: number; channel: number }, strips: Strip[]) {
   const strip = strips.find((s) => s.cluster === a.cluster && s.index === a.index);
   const prefix = a.cluster === CLUSTER.TALKBACK ? "" : `${a.cluster === CLUSTER.INPUT && strips === show.inputs ? "Ch" : CLUSTER_LABEL[a.cluster]} ${a.index + 1}`;

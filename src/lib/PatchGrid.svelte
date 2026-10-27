@@ -207,7 +207,7 @@
                   step={gainRange?.step}
                   disabled={!gainRange}
                   title={gainRange
-                    ? `Gain ${p.gain} dB (${gainRange.min} to ${gainRange.max} dB). Drag or scroll to turn, Shift for fine, double-click to type`
+                    ? `Gain ${p.gain} dB (${gainRange.min} to ${gainRange.max} dB). Drag to turn, Shift for fine, double-click to type`
                     : `Gain ${p.gain} dB (range of this device unknown, not editable)`}
                   onchange={(gain) => onpreamp(device, p.channel, gain, null)}
                   onedit={() => (editing = c)}

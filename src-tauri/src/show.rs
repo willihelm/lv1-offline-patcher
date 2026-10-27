@@ -19,13 +19,16 @@ pub const INPUT: i64 = 0;
 pub const TALKBACK: i64 = 8;
 pub const HW_IN: i64 = 10;
 pub const HW_OUT: i64 = 11;
-/// Clusters that can feed a hardware output (direct outs and busses).
-const SOURCE_CLUSTERS: [i64; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+pub const MON: i64 = 25;
+/// Clusters that can feed a hardware output (direct outs and busses), in display order:
+/// the monitor mixes are aux busses too and follow the FX auxes.
+const SOURCE_CLUSTERS: [i64; 9] = [0, 1, 2, MON, 3, 4, 5, 6, 7];
 /// snapshot_chainer_params.param_id of PARAM_COLOR_VALUE
 const PARAM_COLOR: i64 = 592;
 /// snapshot_chainer_params.param_id of PARAM_OUTPUT_DIRECT_SOURCE (0 INP, 1 PRE, 2 PST, 3 PSP)
 const PARAM_DIRECT_SOURCE: i64 = 379;
 pub const TAP_INP: i64 = 0;
+#[cfg(test)]
 const TAP_PRE: i64 = 1;
 const TAP_PST: i64 = 2;
 const TAP_PSP: i64 = 3;
@@ -105,17 +108,15 @@ pub struct Strip {
     /// a mono-to-stereo plugin (4cc ending in X) makes a mono channel stereo after it
     #[serde(skip)]
     mono_to_stereo: bool,
-    /// tap value stored in the file (None: not stored, LV1 default applies)
+    /// tap value stored in the file (None: not stored, `default_tap` applies)
     #[serde(skip)]
     stored_tap: Option<i64>,
+    /// LV1 default of the tap per object type (chainer_params_default_values)
+    #[serde(skip)]
+    default_tap: i64,
 }
 
 impl Strip {
-    fn default_tap(&self) -> i64 {
-        // LV1 shows PRE for direct outs and PST for busses without a stored value
-        if self.cluster == INPUT { TAP_PRE } else { TAP_PST }
-    }
-
     /// Number of output channels this strip feeds into the patch.
     fn source_width(&self, tap: i64) -> i64 {
         let w = if self.cluster != INPUT {
@@ -239,10 +240,12 @@ impl Show {
             .filter(|s| s.cluster == INPUT || s.cluster == TALKBACK)
             .map(|s| Strip { width: s.num_inputs.clamp(1, 2), tap: None, ..s.clone() })
             .collect();
-        let sources: Vec<Strip> = strips.into_iter().filter(|s| SOURCE_CLUSTERS.contains(&s.cluster)).collect();
+        let mut sources: Vec<Strip> = strips.into_iter().filter(|s| SOURCE_CLUSTERS.contains(&s.cluster)).collect();
+        // stable sort keeps the index order within a cluster
+        sources.sort_by_key(|s| SOURCE_CLUSTERS.iter().position(|&c| c == s.cluster));
         let taps = sources
             .iter()
-            .map(|s| ((s.cluster, s.index), s.stored_tap.unwrap_or_else(|| s.default_tap())))
+            .map(|s| ((s.cluster, s.index), s.stored_tap.unwrap_or(s.default_tap)))
             .collect();
 
         Ok(Show {
@@ -312,14 +315,14 @@ impl Show {
     }
 
     fn tap(&self, s: &Strip) -> i64 {
-        self.edits.taps.get(&(s.cluster, s.index)).copied().unwrap_or_else(|| s.default_tap())
+        self.edits.taps.get(&(s.cluster, s.index)).copied().unwrap_or(s.default_tap)
     }
 
     /// Sources whose tap differs from the file.
     fn changed_taps(&self) -> impl Iterator<Item = (&Strip, i64)> {
         self.sources.iter().filter_map(|s| {
             let tap = self.tap(s);
-            (tap != s.stored_tap.unwrap_or_else(|| s.default_tap())).then_some((s, tap))
+            (tap != s.stored_tap.unwrap_or(s.default_tap)).then_some((s, tap))
         })
     }
 
@@ -651,6 +654,20 @@ fn load_preamps(db: &Connection, snapshot: i64, devices: &mut [Device]) -> rusql
 
 /// All active mixer objects.
 fn load_strips(db: &Connection, snapshot: Option<i64>) -> rusqlite::Result<Vec<Strip>> {
+    // LV1 stores the tap only where it differs from the per-type default (PST in all files seen)
+    let mut default_taps: HashMap<i64, i64> = HashMap::new();
+    let has_defaults: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chainer_params_default_values')",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_defaults {
+        let mut stmt = db.prepare("SELECT obj_type, param_value FROM chainer_params_default_values WHERE param_id = ?")?;
+        for row in stmt.query_map([PARAM_DIRECT_SOURCE], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)? as i64)))? {
+            let (obj_type, tap) = row?;
+            default_taps.insert(obj_type, tap);
+        }
+    }
     let mut stmt = db.prepare(
         "SELECT o.obj_type, o.obj_index, COALESCE(sc.name, o.name), ch.num_inputs, ch.num_outputs,
                 (SELECT p.param_value FROM snapshot_chainer_params p
@@ -684,6 +701,7 @@ fn load_strips(db: &Connection, snapshot: Option<i64>) -> rusqlite::Result<Vec<S
                 num_outputs: r.get(4)?,
                 mono_to_stereo: r.get(7)?,
                 stored_tap: tap.map(|t| t as i64),
+                default_tap: default_taps.get(&cluster).copied().unwrap_or(TAP_PST),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -694,13 +712,14 @@ fn default_name(cluster: i64, index: i64) -> String {
     let label = match cluster {
         0 => "Ch",
         1 => "Group",
-        2 => "Aux",
+        2 => "FX",
         3 => "Main",
         4 => "Center",
         5 => "Mono",
         6 => "Matrix",
         7 => "Cue",
         8 => "Talkback",
+        MON => "Mon",
         _ => "Obj",
     };
     format!("{label} {}", index + 1)
@@ -806,9 +825,9 @@ mod tests {
         let src = |show: &Show, cluster: i64, idx: i64| {
             show.view().sources.into_iter().find(|s| s.cluster == cluster && s.index == idx).unwrap()
         };
-        // nothing stored: LV1 defaults are PRE for direct outs, PST for busses
+        // nothing stored: the LV1 default (chainer_params_default_values) is PST
         let kick = src(&show, INPUT, 0);
-        assert_eq!((kick.name.as_str(), kick.tap, kick.width), ("Kick", Some(TAP_PRE), 1));
+        assert_eq!((kick.name.as_str(), kick.tap, kick.width), ("Kick", Some(TAP_PST), 1));
         assert_eq!(src(&show, 3, 0).tap, Some(TAP_PST));
 
         show.set_tap(INPUT, 0, TAP_PSP).unwrap();
@@ -822,7 +841,7 @@ mod tests {
         show.save(&path, false).unwrap();
         let reread = Show::open(&path).unwrap();
         assert_eq!(src(&reread, INPUT, 0).tap, Some(TAP_PSP));
-        assert_eq!(src(&reread, INPUT, 1).tap, Some(TAP_PRE));
+        assert_eq!(src(&reread, INPUT, 1).tap, Some(TAP_PST));
         assert!(!reread.dirty());
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }

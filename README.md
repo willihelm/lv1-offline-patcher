@@ -36,8 +36,8 @@ undo step.
 Numbers): every input with gain, 48V and what it feeds, then every output with its source.
 
 In the Input view, the rows above the column numbers show the preamps of the selected I/O device.
-Click **48V** to switch phantom power. Turn a gain knob by dragging up/down (Shift for fine),
-with the mouse wheel or the arrow keys. Double-click (or Enter) types a value: Enter confirms,
+Click **48V** to switch phantom power. Turn a gain knob by dragging up/down (Shift for fine)
+or with the arrow keys. Double-click (or Enter) types a value: Enter confirms,
 Tab moves to the next input, Esc cancels. Gain can be edited on the IOS-XL and IOX (0 to +59.5 dB
 in 0.5 dB steps) and on the IONIC 16/24 and LV1 Classic (0 to +60 dB in 1 dB steps). Other
 devices show their gain read-only because their range isn't known yet.
