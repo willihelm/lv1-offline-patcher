@@ -15,7 +15,7 @@ import {
   type Strip,
 } from "./types";
 
-export type PatchView = "input" | "output" | "d2d";
+export type PatchView = "input" | "output" | "d2d" | "list";
 export type OutputTab = "direct" | "busses";
 
 export interface DataRow {
@@ -327,4 +327,89 @@ export function copyPatchOps(show: ShowState, from: Device, to: Device, part: Co
   // leave out ops that change nothing
   const same = (a?: Src | null, b?: Src | null) => (a && b ? key(a) === key(b) : !a && !b);
   return { ops: [...ops.values()].filter((op) => !same(current.get(dstKey(op.dst)), op.src)), skipped };
+}
+
+/** e.g. "Ch 1 Kick L", "Aux 2 Wedges", "Talkback" */
+function stripLabel(show: ShowState, a: { cluster: number; index: number; channel: number }, strips: Strip[]) {
+  const strip = strips.find((s) => s.cluster === a.cluster && s.index === a.index);
+  const prefix = a.cluster === CLUSTER.TALKBACK ? "" : `${a.cluster === CLUSTER.INPUT && strips === show.inputs ? "Ch" : CLUSTER_LABEL[a.cluster]} ${a.index + 1}`;
+  const side = strip?.width === 2 ? (a.channel === 0 ? "L" : "R") : "";
+  return [prefix, strip?.name ?? (prefix ? "" : CLUSTER_LABEL[a.cluster]), side].filter(Boolean).join(" ");
+}
+
+export interface ListEntry {
+  label: string;
+  /** channel color, for channels and busses */
+  color?: string;
+  /** device to device: the mixer channels the same device input feeds */
+  channels?: ListEntry[];
+}
+
+export interface ListRow {
+  channel: number;
+  type: string;
+  port: string;
+  preamp?: Preamp;
+  /** inputs: everything the input feeds; outputs: its source */
+  patch: ListEntry[];
+}
+
+/** Patch list of `device`: every input with what it feeds, every output with its source. */
+export function devicePatchList(show: ShowState, device: Device) {
+  const type = (p: Port) => [p.major, p.minor].filter(Boolean).join(" ");
+  const color = (strips: Strip[], a: { cluster: number; index: number }) => {
+    const strip = strips.find((s) => s.cluster === a.cluster && s.index === a.index);
+    return strip && stripColor(strip.color);
+  };
+  const dstEntry = (d: Dst): ListEntry =>
+    d.cluster === CLUSTER.HW_OUT
+      ? { label: portLabel(show.devices, d.index, d.channel, true) }
+      : {
+          label: `${stripLabel(show, d, show.inputs)}${d.cluster === CLUSTER.INPUT ? ` (Input ${d.section === 1 ? "B" : "A"})` : ""}`,
+          color: color(show.inputs, d),
+        };
+  const channelsOf = (s: Src) =>
+    show.routes
+      .filter((r) => r.dst.cluster !== CLUSTER.HW_OUT && key(r.src) === key(s))
+      .sort((a, b) => a.dst.section - b.dst.section || a.dst.cluster - b.dst.cluster || a.dst.index - b.dst.index)
+      .map((r) => dstEntry(r.dst));
+  const srcEntry = (s: Src): ListEntry =>
+    s.cluster === CLUSTER.HW_IN
+      ? { label: portLabel(show.devices, s.index, s.channel, false), channels: channelsOf(s) }
+      : { label: stripLabel(show, s, show.sources), color: color(show.sources, s) };
+  const inputs: ListRow[] = device.inPorts.map((port) => ({
+    channel: port.channel + 1,
+    type: type(port),
+    port: port.label,
+    preamp: device.preamps.find((p) => p.channel === port.channel),
+    patch: show.routes
+      .filter((r) => r.src.cluster === CLUSTER.HW_IN && r.src.index === device.idx && r.src.channel === port.channel)
+      .map((r) => dstEntry(r.dst)),
+  }));
+  const outputs: ListRow[] = device.outPorts.map((port) => {
+    const src = show.routes.find(
+      (r) => r.dst.cluster === CLUSTER.HW_OUT && r.dst.index === device.idx && r.dst.channel === port.channel,
+    )?.src;
+    return { channel: port.channel + 1, type: type(port), port: port.label, patch: src ? [srcEntry(src)] : [] };
+  });
+  return { inputs, outputs };
+}
+
+/** Patch list of `device` as CSV (semicolon separated with decimal comma, for Excel/Numbers). */
+export function devicePatchCsv(show: ShowState, device: Device) {
+  const cell = (v: string) => (/[;"\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const { inputs, outputs } = devicePatchList(show, device);
+  const line = (dir: string, r: ListRow) => {
+    const gain = r.preamp?.gain == null ? "" : String(r.preamp.gain).replace(".", ",");
+    const phantom = r.preamp?.phantom == null ? "" : r.preamp.phantom ? "on" : "off";
+    const patch = r.patch.map((e) => (e.channels?.length ? `${e.label} → ${e.channels.map((c) => c.label).join(" / ")}` : e.label));
+    return [dir, String(r.channel), r.type, r.port, gain, phantom, patch.join(", ")];
+  };
+  const lines = [
+    ["Direction", "Channel", "Type", "Port", "Gain (dB)", "48V", "Patch"],
+    ...inputs.map((r) => line("In", r)),
+    ...outputs.map((r) => line("Out", r)),
+  ];
+  // BOM so that Excel reads umlauts as UTF-8
+  return "\uFEFF" + lines.map((l) => l.map(cell).join(";")).join("\r\n") + "\r\n";
 }

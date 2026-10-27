@@ -12,6 +12,7 @@ export class Tab {
   view = $state<PatchView>("input");
   section = $state(0);
   outputTab = $state<OutputTab>("direct");
+  listPart = $state<"all" | "inputs" | "outputs">("all");
   devIdx = $state(-1);
   srcDevIdx = $state(-1);
   selected = $state(new Set<number>());

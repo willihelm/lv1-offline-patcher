@@ -31,3 +31,4 @@ export const setPreamp = (id: number, idx: number, channel: number, gain: number
   call<ShowState>("set_preamp", { id, idx, channel, gain, phantom });
 export const save = (id: number, path: string | null, force: boolean) =>
   call<{ show: ShowState; backup: string | null }>("save", { id, path, force });
+export const exportText = (path: string, contents: string) => call<void>("export_text", { path, contents });

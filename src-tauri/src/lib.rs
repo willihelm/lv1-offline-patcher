@@ -190,6 +190,12 @@ fn set_preamp(
     })
 }
 
+/// Write an exported text file (e.g. the patch list of a device), chosen in a save dialog.
+#[tauri::command]
+fn export_text(path: String, contents: String) -> CmdResult<()> {
+    fs::write(path, contents).map_err(|e| e.to_string())
+}
+
 /// Save into the opened file (with backup), or into `path` as a patched copy.
 #[tauri::command]
 fn save(state: State<AppState>, id: u64, path: Option<String>, force: bool) -> CmdResult<SaveResult> {
@@ -295,7 +301,8 @@ pub fn run() {
             set_tap,
             set_driver_channels,
             set_preamp,
-            save
+            save,
+            export_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,17 +1,21 @@
 <script lang="ts">
   import { isTauri } from "@tauri-apps/api/core";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { Menu, MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/menu";
+  import { LogicalPosition } from "@tauri-apps/api/dpi";
+  import { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/menu";
   import { getAllWebviewWindows, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { ask, open, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
   import * as api from "./lib/api";
   import PatchGrid from "./lib/PatchGrid.svelte";
+  import PatchList from "./lib/PatchList.svelte";
   import * as recent from "./lib/recent";
   import {
     clearRowsOps,
     copyPatchOps,
     deviceGrid,
+    devicePatchCsv,
+    devicePatchList,
     deviceToDirectOps,
     directToDeviceOps,
     inputGrid,
@@ -36,20 +40,25 @@
     ["input", "Input"],
     ["output", "Output"],
     ["d2d", "Device to\nDevice"],
+    ["list", "List"],
   ];
 
-  // devices that have channels in the direction the column side of the matrix needs
-  const colDevices = $derived(show?.devices.filter((d) => (tab.view === "input" ? d.ins : d.outs) > 0) ?? []);
+  // devices that have channels in the direction the column side of the matrix needs (the list shows both)
+  const colDevices = $derived(
+    show?.devices.filter((d) => (tab.view === "list" ? d.ins + d.outs : tab.view === "input" ? d.ins : d.outs) > 0) ?? [],
+  );
   const rowDevices = $derived(show?.devices.filter((d) => d.ins > 0) ?? []);
   const device = $derived(colDevices.find((d) => d.idx === tab.devIdx) ?? colDevices[0]);
   const srcDevice = $derived(rowDevices.find((d) => d.idx === tab.srcDevIdx) ?? rowDevices[0]);
 
   const grid = $derived.by(() => {
-    if (!show || !device) return null;
+    if (!show || !device || tab.view === "list") return null;
     if (tab.view === "input") return inputGrid(show, device, tab.section);
     if (tab.view === "output") return outputGrid(show, device, tab.outputTab);
     return srcDevice ? deviceGrid(show, srcDevice, device) : null;
   });
+
+  const patchList = $derived(show && device && tab.view === "list" ? devicePatchList(show, device) : null);
 
   const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
   const dirName = (p: string) => p.slice(0, p.length - baseName(p).length).replace(/[\\/]$/, "");
@@ -283,14 +292,14 @@
 
   const conversions = [
     {
-      label: "Convert Direct Outs to Device to Device",
+      label: "Convert DO → D2D",
       ops: directToDeviceOps,
       none: "no direct outs to convert",
       done: (n: number) => `${n} direct out${n > 1 ? "s" : ""} converted to device to device`,
       skip: "no input patch",
     },
     {
-      label: "Convert Device to Device to Direct Outs",
+      label: "Convert D2D → DO",
       ops: deviceToDirectOps,
       none: "no device to device patches to convert",
       done: (n: number) => `${n} device to device patch${n > 1 ? "es" : ""} converted to direct outs`,
@@ -341,42 +350,95 @@
     });
   }
 
-  /** right-click menu of a device */
-  async function deviceMenu(e: MouseEvent, d: Device) {
+  /** save the patch list of `d` as CSV */
+  async function exportPatchList(d: Device) {
+    const t = tab;
+    const csv = devicePatchCsv(show!, d);
+    const name = `${baseName(t.show!.path).replace(/\.emo$/i, "")} - ${d.name.replace(/[\\/:*?"<>|]/g, "_")}.csv`;
+    if (!isTauri()) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+      a.download = name;
+      a.click();
+      return;
+    }
+    const path = await saveDialog({
+      defaultPath: `${dirName(t.show!.path)}/${name}`,
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (!path) return;
+    try {
+      await api.exportText(path, csv);
+      t.message = `${d.name}: patch list exported to ${path}`;
+    } catch (e) {
+      t.message = `Error: ${e}`;
+    }
+  }
+
+  /** all functions of a device: driver channels, conversions, copy patch; below the button `at` or at the mouse */
+  async function deviceMenu(e: MouseEvent, d: Device, at?: HTMLElement) {
     e.preventDefault();
     if (busy || !show) return;
     const others = show.devices.filter((o) => o.idx !== d.idx && copyParts.some(([p]) => canCopy(o, d, p)));
-    if (!isTauri()) {
-      const conv = d.outs ? conversions.find((c) => window.confirm(`${d.name}: ${c.label}?`)) : undefined;
-      if (conv) return convert(d, conv);
-      const no = window.prompt(`${d.name}: Copy Patch from Device (number)?`);
-      const from = others.find((o) => String(o.idx + 1) === no?.trim());
-      const part = from && copyParts.find(([p, label]) => canCopy(from, d, p) && window.confirm(`Copy ${label} from ${from.name}?`));
-      if (from && part) copyPatch(from, d, part[0]);
-      return;
-    }
+    if (!isTauri()) return browserDeviceMenu(d, others);
     const item = (text: string, action: () => void, enabled = true) => MenuItem.new({ text, action, enabled });
-    const copy = await Submenu.new({
-      text: "Copy Patch from Device",
-      enabled: others.length > 0,
-      items: await Promise.all(
-        others.map(async (o) =>
-          Submenu.new({
-            text: `${deviceNo(o)} ${o.name}`,
-            items: await Promise.all(copyParts.map(([p, label]) => item(label, () => copyPatch(o, d, p), canCopy(o, d, p)))),
-          }),
+    const separator = () => PredefinedMenuItem.new({ item: "Separator" });
+    const items: (MenuItem | Submenu | CheckMenuItem | PredefinedMenuItem)[] = [
+      await item(`${deviceNo(d)} ${d.name}`, () => {}, false),
+    ];
+    if (d.isDaw)
+      items.push(
+        await Submenu.new({
+          text: "Driver Channels",
+          items: await Promise.all(
+            DRIVER_CHANNELS.map((n) =>
+              CheckMenuItem.new({
+                text: `${n} ch`,
+                checked: d.ins === n && d.outs === n,
+                action: () => setDriverChannels(d, n),
+              }),
+            ),
+          ),
+        }),
+      );
+    if (d.outs) {
+      items.push(await separator());
+      for (const c of conversions) items.push(await item(c.label, () => convert(d, c)));
+    }
+    items.push(
+      await separator(),
+      await item("Export Patch List…", () => exportPatchList(d)),
+      await Submenu.new({
+        text: "Copy Patch from Device",
+        enabled: others.length > 0,
+        items: await Promise.all(
+          others.map(async (o) =>
+            Submenu.new({
+              text: `${deviceNo(o)} ${o.name}`,
+              items: await Promise.all(copyParts.map(([p, label]) => item(label, () => copyPatch(o, d, p), canCopy(o, d, p)))),
+            }),
+          ),
         ),
-      ),
-    });
-    const menu = await Menu.new({
-      items: [
-        ...(d.outs
-          ? [...(await Promise.all(conversions.map((c) => item(c.label, () => convert(d, c))))), await PredefinedMenuItem.new({ item: "Separator" })]
-          : []),
-        copy,
-      ],
-    });
-    await menu.popup();
+      }),
+    );
+    const menu = await Menu.new({ items });
+    const r = at?.getBoundingClientRect();
+    await menu.popup(r && new LogicalPosition(r.left, r.bottom + 4));
+  }
+
+  /** stand-in for the native menu in a plain browser */
+  function browserDeviceMenu(d: Device, others: Device[]) {
+    if (window.confirm(`${d.name}: Export Patch List?`)) return exportPatchList(d);
+    if (d.isDaw) {
+      const n = Number(window.prompt(`${d.name}: Driver Channels (${DRIVER_CHANNELS.join(", ")}), empty to skip`));
+      if (DRIVER_CHANNELS.includes(n)) return setDriverChannels(d, n);
+    }
+    const conv = d.outs ? conversions.find((c) => window.confirm(`${d.name}: ${c.label}?`)) : undefined;
+    if (conv) return convert(d, conv);
+    const no = window.prompt(`${d.name}: Copy Patch from Device (number)?`);
+    const from = others.find((o) => String(o.idx + 1) === no?.trim());
+    const part = from && copyParts.find(([p, label]) => canCopy(from, d, p) && window.confirm(`Copy ${label} from ${from.name}?`));
+    if (from && part) copyPatch(from, d, part[0]);
   }
 
   const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
@@ -534,6 +596,17 @@
       </div>
       <button onclick={() => runShow(api.undo)} disabled={!show.canUndo || busy} title="Undo ({keys.undo})">Undo</button>
       <button onclick={() => runShow(api.redo)} disabled={!show.canRedo || busy} title="Redo ({keys.redo})">Redo</button>
+      {#if device}
+        <button
+          class="devmenu"
+          disabled={busy}
+          title={`Functions of ${device.name} (or right-click a device):\ndriver channels, export patch list, copy patch,\nConvert DO → D2D: Direct Outs to Device to Device\nConvert D2D → DO: Device to Device to Direct Outs`}
+          onclick={(e) => deviceMenu(e, device, e.currentTarget)}
+        >
+          {deviceNo(device)} {device.name}
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
+        </button>
+      {/if}
       <div class="spacer"></div>
       {#if show.lv1Open}<span class="warn">LV1 has this file open</span>{/if}
       <button class="primary" onclick={() => saveFile(false)} disabled={!show.dirty || busy} title="Save ({keys.save})">
@@ -559,30 +632,26 @@
             <div class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx}>
               <button
                 class="dsel"
-                title={`${d.name}\nRight-click to copy the patch of another device` + (d.outs ? " or to convert between direct outs and device to device" : "")}
+                title={`${d.name}\nRight-click for device functions\n(DO = Direct Out, D2D = Device to Device)`}
                 onclick={() => (tab.devIdx = d.idx)}
                 oncontextmenu={(e) => deviceMenu(e, d)}
               >
                 <div class="dhead">{deviceNo(d)} {d.name}</div>
                 <div class="dbody">
                   <span class="kind">{d.isDaw ? "DAW" : d.kind}</span>
-                  {#if !d.isDaw}
-                    <span class="io">{tab.view === "input" ? d.inPorts.length + " in" : d.outPorts.length + " out"}</span>
+                  {#if d.isDaw}
+                    <span class="io">{d.ins === d.outs ? `${d.ins} ch` : `${d.ins} in / ${d.outs} out`}</span>
+                  {:else}
+                    <span class="io">
+                      {tab.view === "list"
+                        ? `${d.inPorts.length} in / ${d.outPorts.length} out`
+                        : tab.view === "input"
+                          ? d.inPorts.length + " in"
+                          : d.outPorts.length + " out"}
+                    </span>
                   {/if}
                 </div>
               </button>
-              {#if d.isDaw}
-                <select
-                  class="driver"
-                  title="Driver Channels (removes patches on channels that no longer exist)"
-                  value={d.ins === d.outs ? d.ins : ""}
-                  disabled={busy}
-                  onchange={(e) => setDriverChannels(d, +e.currentTarget.value)}
-                >
-                  {#if d.ins !== d.outs}<option value="" disabled>{d.ins} in / {d.outs} out</option>{/if}
-                  {#each DRIVER_CHANNELS as n}<option value={n}>{n} ch</option>{/each}
-                </select>
-              {/if}
             </div>
           {/each}
         </div>
@@ -594,6 +663,10 @@
         {#if tab.view === "input"}
           <button class="big" class:active={tab.section === 0} onclick={() => (tab.section = 0)}>Input A</button>
           <button class="big" class:active={tab.section === 1} onclick={() => (tab.section = 1)}>Input B</button>
+        {:else if tab.view === "list"}
+          {#each [["all", "All"], ["inputs", "Inputs"], ["outputs", "Outputs"]] as const as [p, label]}
+            <button class="big" class:active={tab.listPart === p} onclick={() => (tab.listPart = p)}>{label}</button>
+          {/each}
         {:else if tab.view === "d2d"}
           <div class="caption small">From</div>
           {#each rowDevices as d (d.idx)}
@@ -639,7 +712,16 @@
         </div>
       {/snippet}
       <div class="panel gridpanel">
-        {#if grid}
+        {#if patchList && device}
+          <div class="listhead">
+            <div class="where">
+              <strong>{deviceNo(device)} {device.name}</strong>
+              <span>Patch list of the device</span>
+            </div>
+            <button onclick={() => exportPatchList(device)} disabled={busy}>Export CSV…</button>
+          </div>
+          <PatchList inputs={patchList.inputs} outputs={patchList.outputs} part={tab.listPart} />
+        {:else if grid}
           <div class="gridwrap">
             <PatchGrid
               {grid}
@@ -847,6 +929,25 @@
   .file span {
     color: var(--text-dim);
   }
+  .devmenu {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 260px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .devmenu svg {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
   .spacer {
     flex: 1;
   }
@@ -910,30 +1011,6 @@
     text-align: left;
     display: flex;
     flex-direction: column;
-  }
-  .driver {
-    /* a fixed height instead of the native control, which is taller in WebKit than in Chromium */
-    appearance: none;
-    -webkit-appearance: none;
-    height: 22px;
-    margin: 0 6px 6px;
-    padding: 0 18px 0 6px;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 600;
-    line-height: 20px;
-    text-align: center;
-    text-align-last: center;
-    color: var(--text);
-    background: #262628
-      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a6a6aa' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
-      no-repeat right 6px center / 9px 6px;
-    border: 1px solid #555;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-  .driver:hover:not(:disabled) {
-    border-color: #888;
   }
   .dhead {
     background: #3d8bfd;
@@ -1056,6 +1133,13 @@
     stroke-width: 2;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+  .listhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 12px 0;
   }
   .gridwrap {
     flex: 1;

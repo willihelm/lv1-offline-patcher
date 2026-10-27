@@ -9,21 +9,29 @@ without the I/O hardware being online. The UI follows LV1's Patch page:
 - **Output**: Direct (channel direct outs) and Mix Busses (groups, auxes, mains, matrices, cue)
   → device outputs. The Source column sets the output source: INP, PRE, PST or PSP
 - **Device to Device**: device inputs → device outputs
+- **List**: everything patched on one device as a list: each input with gain, 48V and what it feeds, each
+  output with its source (All / Inputs / Outputs). If an output comes straight from a device input (device to
+  device), the list also shows the mixer channels that input feeds. **Export CSV…** saves it as a file
 
-Right-click a device (e.g. a DAW) and choose **Convert Direct Outs to Device to Device** to repatch
+The device button in the toolbar (it shows the selected device) opens the device menu; a right-click on a
+device opens it too. For a DAW it sets the **Driver Channels** (patches on channels that no longer exist are
+removed). **Convert DO → D2D** (direct outs to device to device) repatches
 all channel direct outs on it straight from the device inputs that feed those channels (Input A,
 or Input B if A is empty), bypassing the mixer. Channels without an input patch are skipped and listed in
-the status bar. **Convert Device to Device to Direct Outs** goes the other way: every device input
+the status bar. **Convert D2D → DO** goes the other way: every device input
 patched to the device becomes the direct out of the channel it feeds (if several channels use it:
 Input A first, then the lowest channel number). Each conversion is one undo step.
 
-**Copy Patch from Device** (also in the right-click menu) gives the clicked device the patch of another
+**Copy Patch from Device** gives the device the patch of another
 device, channel by channel: **Inputs**, **Outputs** or **Inputs and Outputs**. Copying inputs repatches
 everything the other device's inputs feed (channels in Input A and B, Talkback, device outputs) from the
 same inputs of this device. A destination has only one source, so these patches move away from the other
 device, e.g. when swapping a stage box. Copying outputs gives every output the source of the same output on
-the other device, or unpatches it; the other device keeps its outputs. Channels the clicked device
+the other device, or unpatches it; the other device keeps its outputs. Channels the device
 doesn't have are skipped and counted in the status bar. A copy is one undo step.
+
+**Export Patch List…** saves a CSV of the device (semicolon separated with decimal comma, for Excel and
+Numbers): every input with gain, 48V and what it feeds, then every output with its source.
 
 In the Input view, the rows above the column numbers show the preamps of the selected I/O device.
 Click **48V** to switch phantom power. Turn a gain knob by dragging up/down (Shift for fine),
