@@ -22,13 +22,15 @@ the status bar. **Convert D2D → DO** goes the other way: every device input
 patched to the device becomes the direct out of the channel it feeds (if several channels use it:
 Input A first, then the lowest channel number). Each conversion is one undo step.
 
-**Copy Patch from Device** gives the device the patch of another
-device, channel by channel: **Inputs**, **Outputs** or **Inputs and Outputs**. Copying inputs repatches
-everything the other device's inputs feed (channels in Input A and B, Talkback, device outputs) from the
-same inputs of this device. A destination has only one source, so these patches move away from the other
-device, e.g. when swapping a stage box. Copying outputs gives every output the source of the same output on
-the other device, or unpatches it; the other device keeps its outputs. Channels the device
-doesn't have are skipped and counted in the status bar. A copy is one undo step.
+**Copy Patch from Device…** opens a dialog that gives a device the patch of another device, channel by
+channel. Choose the two devices and **Inputs** and/or **Outputs**; the preview lists every channel that
+changes with its patch now and after the copy. Uncheck channels to leave them as they are (Shift-click
+checks or unchecks a range). Copying inputs repatches everything the other device's inputs feed (channels in
+Input A and B, Talkback, device outputs) from the same inputs of this device. A destination has only one
+source, so these patches move away from the other device, e.g. when swapping a stage box. Copying outputs
+gives every output the source of the same output on the other device, or unpatches it; the other device
+keeps its outputs. Channels the target device doesn't have are listed but can't be copied. A copy is one
+undo step.
 
 **Export Patch List…** saves a CSV of the device (semicolon separated with decimal comma, for Excel and
 Numbers): every input with gain, 48V and what it feeds, then every output with its source.

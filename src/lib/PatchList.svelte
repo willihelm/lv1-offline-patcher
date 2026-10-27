@@ -1,6 +1,7 @@
 <script lang="ts">
   // Read-only list of everything patched on one device: inputs with what they feed, outputs with their source.
   import type { ListRow } from "./grid";
+  import PatchEntries from "./PatchEntries.svelte";
 
   let { inputs, outputs, part }: { inputs: ListRow[]; outputs: ListRow[]; part: "all" | "inputs" | "outputs" } = $props();
 
@@ -39,17 +40,7 @@
               <td>{#if r.preamp?.phantom}<span class="phantom">48V</span>{/if}</td>
             {/if}
             <td class="patch">
-              {#each r.patch as e}
-                <span class="entry" style:--c={e.color ?? "transparent"} class:colored={e.color}>{e.label}</span>
-                {#if e.channels?.length}
-                  <span class="via" title="Device to device: this device input feeds these mixer channels">→</span>
-                  {#each e.channels as c}
-                    <span class="entry colored" style:--c={c.color ?? "transparent"}>{c.label}</span>
-                  {/each}
-                {/if}
-              {:else}
-                <span class="dim">–</span>
-              {/each}
+              <PatchEntries entries={r.patch} />
             </td>
           </tr>
         {/each}
@@ -109,20 +100,6 @@
   .patch {
     width: 100%;
     white-space: normal;
-  }
-  .entry {
-    display: inline-block;
-    margin: 1px 6px 1px 0;
-    padding: 1px 8px;
-    border-radius: 4px;
-    background: #333;
-  }
-  .entry.colored {
-    border-left: 4px solid var(--c);
-  }
-  .via {
-    margin-right: 6px;
-    color: var(--text-dim);
   }
   .dim,
   .unpatched td {

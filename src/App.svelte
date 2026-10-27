@@ -9,10 +9,10 @@
   import * as api from "./lib/api";
   import PatchGrid from "./lib/PatchGrid.svelte";
   import PatchList from "./lib/PatchList.svelte";
+  import CopyDialog from "./lib/CopyDialog.svelte";
   import * as recent from "./lib/recent";
   import {
     clearRowsOps,
-    copyPatchOps,
     deviceGrid,
     devicePatchCsv,
     devicePatchList,
@@ -20,7 +20,6 @@
     directToDeviceOps,
     inputGrid,
     outputGrid,
-    type CopyPart,
     type PatchView,
   } from "./lib/grid";
   import { Tab } from "./lib/tab.svelte";
@@ -323,29 +322,14 @@
     });
   }
 
-  const copyParts: [CopyPart, string][] = [
-    ["inputs", "Inputs"],
-    ["outputs", "Outputs"],
-    ["both", "Inputs and Outputs"],
-  ];
+  /** device the copy dialog copies to, if open */
+  let copyTo = $state<Device | null>(null);
 
-  /** which parts of the patch can be copied between two devices */
-  const canCopy = (from: Device, to: Device, part: CopyPart) =>
-    (part === "outputs" || (from.ins > 0 && to.ins > 0)) && (part === "inputs" || (from.outs > 0 && to.outs > 0));
-
-  /** give `to` the input and/or output patch of `from` */
-  function copyPatch(from: Device, to: Device, part: CopyPart) {
+  function applyCopy(ops: PatchOp[], from: Device, to: Device) {
     const t = tab;
-    const { ops, skipped } = copyPatchOps(show!, from, to, part);
-    const what = copyParts.find(([p]) => p === part)![1].toLowerCase();
-    const rest = skipped ? `; ${skipped} patch${skipped > 1 ? "es" : ""} skipped, ${to.name} has no such channel` : "";
-    if (!ops.length) {
-      t.message = `${to.name}: ${what} already patched like ${from.name}${rest}`;
-      return;
-    }
     run(t, async () => {
       const s = await api.patch(t.id!, ops);
-      t.message = `${to.name}: ${what} patch copied from ${from.name}, ${ops.length} change${ops.length > 1 ? "s" : ""}${rest}`;
+      t.message = `${to.name}: patch copied from ${from.name}, ${ops.length} change${ops.length > 1 ? "s" : ""}`;
       return s;
     });
   }
@@ -379,8 +363,7 @@
   async function deviceMenu(e: MouseEvent, d: Device, at?: HTMLElement) {
     e.preventDefault();
     if (busy || !show) return;
-    const others = show.devices.filter((o) => o.idx !== d.idx && copyParts.some(([p]) => canCopy(o, d, p)));
-    if (!isTauri()) return browserDeviceMenu(d, others);
+    if (!isTauri()) return browserDeviceMenu(d);
     const item = (text: string, action: () => void, enabled = true) => MenuItem.new({ text, action, enabled });
     const separator = () => PredefinedMenuItem.new({ item: "Separator" });
     const items: (MenuItem | Submenu | CheckMenuItem | PredefinedMenuItem)[] = [
@@ -408,18 +391,7 @@
     items.push(
       await separator(),
       await item("Export Patch List…", () => exportPatchList(d)),
-      await Submenu.new({
-        text: "Copy Patch from Device",
-        enabled: others.length > 0,
-        items: await Promise.all(
-          others.map(async (o) =>
-            Submenu.new({
-              text: `${deviceNo(o)} ${o.name}`,
-              items: await Promise.all(copyParts.map(([p, label]) => item(label, () => copyPatch(o, d, p), canCopy(o, d, p)))),
-            }),
-          ),
-        ),
-      }),
+      await item("Copy Patch from Device…", () => (copyTo = d), show.devices.length > 1),
     );
     const menu = await Menu.new({ items });
     const r = at?.getBoundingClientRect();
@@ -427,7 +399,8 @@
   }
 
   /** stand-in for the native menu in a plain browser */
-  function browserDeviceMenu(d: Device, others: Device[]) {
+  function browserDeviceMenu(d: Device) {
+    if (window.confirm(`${d.name}: Copy Patch from Device…?`)) return void (copyTo = d);
     if (window.confirm(`${d.name}: Export Patch List?`)) return exportPatchList(d);
     if (d.isDaw) {
       const n = Number(window.prompt(`${d.name}: Driver Channels (${DRIVER_CHANNELS.join(", ")}), empty to skip`));
@@ -435,15 +408,12 @@
     }
     const conv = d.outs ? conversions.find((c) => window.confirm(`${d.name}: ${c.label}?`)) : undefined;
     if (conv) return convert(d, conv);
-    const no = window.prompt(`${d.name}: Copy Patch from Device (number)?`);
-    const from = others.find((o) => String(o.idx + 1) === no?.trim());
-    const part = from && copyParts.find(([p, label]) => canCopy(from, d, p) && window.confirm(`Copy ${label} from ${from.name}?`));
-    if (from && part) copyPatch(from, d, part[0]);
   }
 
   const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
   function keydown(e: KeyboardEvent) {
+    if (copyTo) return; // the copy dialog handles its own keys
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
     // file and tab shortcuts; in the macOS app the menu handles them and sends a "menu" event
@@ -784,6 +754,9 @@
     <span>{status || tab.message}</span>
     {#if grid}<span class="count">{grid.patched.size} patched in view</span>{/if}
   </footer>
+  {#if copyTo && show}
+    <CopyDialog {show} to={copyTo} onapply={applyCopy} onclose={() => (copyTo = null)} />
+  {/if}
 </main>
 
 <style>

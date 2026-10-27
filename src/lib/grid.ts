@@ -291,42 +291,82 @@ export function deviceToDirectOps(show: ShowState, device: Device) {
   return { ops, skipped };
 }
 
-export type CopyPart = "inputs" | "outputs" | "both";
+export type CopyPart = "inputs" | "outputs";
+
+/** One channel of a copy from one device to another, for the preview. */
+export interface CopyItem {
+  part: CopyPart;
+  /** 1-based */
+  channel: number;
+  port: string;
+  /** patch of the channel on the target device now, and after the copy */
+  before: ListEntry[];
+  after: ListEntry[];
+  /** removes the patches of the target channel; applied before all `sets` */
+  clears: PatchOp[];
+  sets: PatchOp[];
+  /** the target device has no such channel */
+  missing: boolean;
+}
 
 /**
- * Ops that give `to` the patch of `from`, channel by channel. Inputs: every destination fed by an
- * input of `from` (channels, Talkback, device outputs) gets the same input of `to` instead, and the
- * other patches of those inputs of `to` are removed. As a destination has one source, this moves
- * the patch away from `from`. Outputs: every output of `to` gets the source of the same output of
- * `from`, or is unpatched. `skipped` counts patches of `from` on channels `to` doesn't have.
+ * Copy of the patch of `from` to `to`, channel by channel. Inputs: everything an input of `from`
+ * feeds (channels, Talkback, device outputs) is fed by the same input of `to` instead, and the
+ * other patches of that input of `to` are removed. As a destination has one source, this moves the
+ * patch away from `from`. Outputs: every output of `to` gets the source of the same output of
+ * `from`, or is unpatched. Turn the chosen items into ops with copyOps.
  */
-export function copyPatchOps(show: ShowState, from: Device, to: Device, part: CopyPart) {
-  const ops = new Map<string, PatchOp>();
-  let skipped = 0;
-  const current = new Map(show.routes.map((r) => [dstKey(r.dst), r.src] as const));
+export function copyPlan(show: ShowState, from: Device, to: Device, parts: CopyPart[]): CopyItem[] {
+  const listFrom = devicePatchList(show, from);
+  const listTo = devicePatchList(show, to);
   const has = (ports: Port[], channel: number) => ports.some((p) => p.channel === channel);
-  if (part !== "outputs") {
-    const shared = (ch: number) => has(from.inPorts, ch) && has(to.inPorts, ch);
-    for (const { src, dst } of show.routes)
-      if (src.cluster === CLUSTER.HW_IN && src.index === to.idx && shared(src.channel)) ops.set(dstKey(dst), { dst, src: null });
-    for (const { src, dst } of show.routes) {
-      if (src.cluster !== CLUSTER.HW_IN || src.index !== from.idx) continue;
-      if (has(to.inPorts, src.channel)) ops.set(dstKey(dst), { dst, src: { ...src, index: to.idx } });
-      else skipped++;
+  const items: CopyItem[] = [];
+  if (parts.includes("inputs"))
+    for (const port of from.inPorts) {
+      const ch = port.channel;
+      const missing = !has(to.inPorts, ch);
+      const routes = (idx: number) => show.routes.filter((r) => r.src.cluster === CLUSTER.HW_IN && r.src.index === idx && r.src.channel === ch);
+      if (missing && !routes(from.idx).length) continue;
+      items.push({
+        part: "inputs",
+        channel: ch + 1,
+        port: port.label,
+        before: listTo.inputs.find((r) => r.channel === ch + 1)?.patch ?? [],
+        after: listFrom.inputs.find((r) => r.channel === ch + 1)?.patch ?? [],
+        clears: missing ? [] : routes(to.idx).map(({ dst }) => ({ dst, src: null })),
+        sets: missing ? [] : routes(from.idx).map(({ src, dst }) => ({ dst, src: { ...src, index: to.idx } })),
+        missing,
+      });
     }
-  }
-  if (part !== "inputs") {
-    for (const { dst } of show.routes)
-      if (dst.cluster === CLUSTER.HW_OUT && dst.index === from.idx && !has(to.outPorts, dst.channel)) skipped++;
-    for (const port of to.outPorts) {
-      if (!has(from.outPorts, port.channel)) continue;
-      const dst = { cluster: CLUSTER.HW_OUT, index: to.idx, section: -1, channel: port.channel };
-      ops.set(dstKey(dst), { dst, src: current.get(dstKey({ ...dst, index: from.idx })) ?? null });
+  if (parts.includes("outputs"))
+    for (const port of from.outPorts) {
+      const ch = port.channel;
+      const missing = !has(to.outPorts, ch);
+      const after = listFrom.outputs.find((r) => r.channel === ch + 1)?.patch ?? [];
+      if (missing && !after.length) continue;
+      const src = show.routes.find((r) => r.dst.cluster === CLUSTER.HW_OUT && r.dst.index === from.idx && r.dst.channel === ch)?.src;
+      items.push({
+        part: "outputs",
+        channel: ch + 1,
+        port: port.label,
+        before: listTo.outputs.find((r) => r.channel === ch + 1)?.patch ?? [],
+        after,
+        clears: [],
+        sets: missing ? [] : [{ dst: { cluster: CLUSTER.HW_OUT, index: to.idx, section: -1, channel: ch }, src: src ?? null }],
+        missing,
+      });
     }
-  }
-  // leave out ops that change nothing
+  return items;
+}
+
+/** Ops of the chosen copy items, without the ones that change nothing. */
+export function copyOps(show: ShowState, items: CopyItem[]) {
+  const ops = new Map<string, PatchOp>();
+  for (const op of items.flatMap((i) => i.clears)) ops.set(dstKey(op.dst), op);
+  for (const op of items.flatMap((i) => i.sets)) ops.set(dstKey(op.dst), op);
+  const current = new Map(show.routes.map((r) => [dstKey(r.dst), r.src] as const));
   const same = (a?: Src | null, b?: Src | null) => (a && b ? key(a) === key(b) : !a && !b);
-  return { ops: [...ops.values()].filter((op) => !same(current.get(dstKey(op.dst)), op.src)), skipped };
+  return [...ops.values()].filter((op) => !same(current.get(dstKey(op.dst)), op.src));
 }
 
 /** e.g. "Ch 1 Kick L", "Aux 2 Wedges", "Talkback" */
