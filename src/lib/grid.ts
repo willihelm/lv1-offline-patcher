@@ -290,3 +290,41 @@ export function deviceToDirectOps(show: ShowState, device: Device) {
   }
   return { ops, skipped };
 }
+
+export type CopyPart = "inputs" | "outputs" | "both";
+
+/**
+ * Ops that give `to` the patch of `from`, channel by channel. Inputs: every destination fed by an
+ * input of `from` (channels, Talkback, device outputs) gets the same input of `to` instead, and the
+ * other patches of those inputs of `to` are removed. As a destination has one source, this moves
+ * the patch away from `from`. Outputs: every output of `to` gets the source of the same output of
+ * `from`, or is unpatched. `skipped` counts patches of `from` on channels `to` doesn't have.
+ */
+export function copyPatchOps(show: ShowState, from: Device, to: Device, part: CopyPart) {
+  const ops = new Map<string, PatchOp>();
+  let skipped = 0;
+  const current = new Map(show.routes.map((r) => [dstKey(r.dst), r.src] as const));
+  const has = (ports: Port[], channel: number) => ports.some((p) => p.channel === channel);
+  if (part !== "outputs") {
+    const shared = (ch: number) => has(from.inPorts, ch) && has(to.inPorts, ch);
+    for (const { src, dst } of show.routes)
+      if (src.cluster === CLUSTER.HW_IN && src.index === to.idx && shared(src.channel)) ops.set(dstKey(dst), { dst, src: null });
+    for (const { src, dst } of show.routes) {
+      if (src.cluster !== CLUSTER.HW_IN || src.index !== from.idx) continue;
+      if (has(to.inPorts, src.channel)) ops.set(dstKey(dst), { dst, src: { ...src, index: to.idx } });
+      else skipped++;
+    }
+  }
+  if (part !== "inputs") {
+    for (const { dst } of show.routes)
+      if (dst.cluster === CLUSTER.HW_OUT && dst.index === from.idx && !has(to.outPorts, dst.channel)) skipped++;
+    for (const port of to.outPorts) {
+      if (!has(from.outPorts, port.channel)) continue;
+      const dst = { cluster: CLUSTER.HW_OUT, index: to.idx, section: -1, channel: port.channel };
+      ops.set(dstKey(dst), { dst, src: current.get(dstKey({ ...dst, index: from.idx })) ?? null });
+    }
+  }
+  // leave out ops that change nothing
+  const same = (a?: Src | null, b?: Src | null) => (a && b ? key(a) === key(b) : !a && !b);
+  return { ops: [...ops.values()].filter((op) => !same(current.get(dstKey(op.dst)), op.src)), skipped };
+}

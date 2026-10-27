@@ -1,14 +1,24 @@
 <script lang="ts">
   import { isTauri } from "@tauri-apps/api/core";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
+  import { Menu, MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/menu";
   import { getAllWebviewWindows, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { ask, open, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
   import * as api from "./lib/api";
   import PatchGrid from "./lib/PatchGrid.svelte";
   import * as recent from "./lib/recent";
-  import { clearRowsOps, deviceGrid, deviceToDirectOps, directToDeviceOps, inputGrid, outputGrid, type PatchView } from "./lib/grid";
+  import {
+    clearRowsOps,
+    copyPatchOps,
+    deviceGrid,
+    deviceToDirectOps,
+    directToDeviceOps,
+    inputGrid,
+    outputGrid,
+    type CopyPart,
+    type PatchView,
+  } from "./lib/grid";
   import { Tab } from "./lib/tab.svelte";
   import { CLUSTER, DRIVER_CHANNELS, type Device, type PatchOp, type ShowState } from "./lib/types";
 
@@ -304,17 +314,68 @@
     });
   }
 
+  const copyParts: [CopyPart, string][] = [
+    ["inputs", "Inputs"],
+    ["outputs", "Outputs"],
+    ["both", "Inputs and Outputs"],
+  ];
+
+  /** which parts of the patch can be copied between two devices */
+  const canCopy = (from: Device, to: Device, part: CopyPart) =>
+    (part === "outputs" || (from.ins > 0 && to.ins > 0)) && (part === "inputs" || (from.outs > 0 && to.outs > 0));
+
+  /** give `to` the input and/or output patch of `from` */
+  function copyPatch(from: Device, to: Device, part: CopyPart) {
+    const t = tab;
+    const { ops, skipped } = copyPatchOps(show!, from, to, part);
+    const what = copyParts.find(([p]) => p === part)![1].toLowerCase();
+    const rest = skipped ? `; ${skipped} patch${skipped > 1 ? "es" : ""} skipped, ${to.name} has no such channel` : "";
+    if (!ops.length) {
+      t.message = `${to.name}: ${what} already patched like ${from.name}${rest}`;
+      return;
+    }
+    run(t, async () => {
+      const s = await api.patch(t.id!, ops);
+      t.message = `${to.name}: ${what} patch copied from ${from.name}, ${ops.length} change${ops.length > 1 ? "s" : ""}${rest}`;
+      return s;
+    });
+  }
+
   /** right-click menu of a device */
   async function deviceMenu(e: MouseEvent, d: Device) {
     e.preventDefault();
-    if (!d.outs || busy) return;
+    if (busy || !show) return;
+    const others = show.devices.filter((o) => o.idx !== d.idx && copyParts.some(([p]) => canCopy(o, d, p)));
     if (!isTauri()) {
-      const conv = conversions.find((c) => window.confirm(`${d.name}: ${c.label}?`));
-      if (conv) convert(d, conv);
+      const conv = d.outs ? conversions.find((c) => window.confirm(`${d.name}: ${c.label}?`)) : undefined;
+      if (conv) return convert(d, conv);
+      const no = window.prompt(`${d.name}: Copy Patch from Device (number)?`);
+      const from = others.find((o) => String(o.idx + 1) === no?.trim());
+      const part = from && copyParts.find(([p, label]) => canCopy(from, d, p) && window.confirm(`Copy ${label} from ${from.name}?`));
+      if (from && part) copyPatch(from, d, part[0]);
       return;
     }
-    const items = conversions.map((c) => MenuItem.new({ text: c.label, action: () => convert(d, c) }));
-    const menu = await Menu.new({ items: await Promise.all(items) });
+    const item = (text: string, action: () => void, enabled = true) => MenuItem.new({ text, action, enabled });
+    const copy = await Submenu.new({
+      text: "Copy Patch from Device",
+      enabled: others.length > 0,
+      items: await Promise.all(
+        others.map(async (o) =>
+          Submenu.new({
+            text: `${deviceNo(o)} ${o.name}`,
+            items: await Promise.all(copyParts.map(([p, label]) => item(label, () => copyPatch(o, d, p), canCopy(o, d, p)))),
+          }),
+        ),
+      ),
+    });
+    const menu = await Menu.new({
+      items: [
+        ...(d.outs
+          ? [...(await Promise.all(conversions.map((c) => item(c.label, () => convert(d, c))))), await PredefinedMenuItem.new({ item: "Separator" })]
+          : []),
+        copy,
+      ],
+    });
     await menu.popup();
   }
 
@@ -498,7 +559,7 @@
             <div class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx}>
               <button
                 class="dsel"
-                title={d.outs ? `${d.name}\nRight-click to convert between direct outs and device to device` : d.name}
+                title={`${d.name}\nRight-click to copy the patch of another device` + (d.outs ? " or to convert between direct outs and device to device" : "")}
                 onclick={() => (tab.devIdx = d.idx)}
                 oncontextmenu={(e) => deviceMenu(e, d)}
               >
