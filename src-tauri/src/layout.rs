@@ -55,6 +55,21 @@ fn model_key(model: &str) -> String {
     key
 }
 
+/// Model of an I/O device by its SoundGrid vendor and device id (table device_iobox). LV1 leaves
+/// the description empty for offline devices, so this is the only hint to the model there.
+/// Ids from real showfiles and from the firmware files (*.wfi) of Waves' I/O modules.
+pub fn model_by_id(vendor_id: i64, device_id: i64) -> Option<&'static str> {
+    Some(match (vendor_id, device_id) {
+        (2, 8) => "IOX",
+        (2, 15) => "IOS-XL",
+        // SoundGrid S50 and S25 versions
+        (21, 0 | 1) => "IONIC 16",
+        (21, 4) => "Classic",
+        (21, 8) => "IONIC 24",
+        _ => return None,
+    })
+}
+
 /// Port layouts per model, from the manufacturers' specs (Waves SoundGrid interfaces chart; IONIC
 /// and LV1 Classic checked against Waves' data sheets and user guides).
 /// Order: analog inputs/line outputs first, then headphones, then digital, as on the IOS-XL.
@@ -204,6 +219,12 @@ mod tests {
         assert_eq!((classic[14].minor.as_str(), classic[14].label.as_str()), ("AES", "1L"));
         assert_eq!(gain_range("IONIC 24").map(|g| g.step), Some(1.0));
         assert_eq!(gain_range("Generic 64 IO"), None);
+        assert_eq!(model_by_id(21, 8).and_then(gain_range).map(|g| g.max), Some(60.0));
+        for id in [0, 1, 4] {
+            assert_eq!(model_by_id(21, id).and_then(gain_range).map(|g| g.step), Some(1.0));
+        }
+        assert_eq!(ports(model_by_id(21, 1).unwrap(), false, Dir::In, 18)[16].minor, "AES");
+        assert_eq!(model_by_id(0, 0), None);
 
         let ionic = ports("IONIC 24", false, Dir::Out, 26);
         assert_eq!((ionic[17].minor.as_str(), ionic[17].label.as_str()), ("Line", "18"));

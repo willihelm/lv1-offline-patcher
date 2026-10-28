@@ -590,9 +590,11 @@ fn load_devices(db: &Connection) -> rusqlite::Result<Vec<Device>> {
         names.insert(k, v);
     }
     let mut stmt = db.prepare(
-        "SELECT device_gender, io_bank, assign, description, mac, in_channel_count,
-                out_channel_count, max_in_channel_count, max_out_channel_count, id
-         FROM device WHERE io_bank >= 0 ORDER BY io_bank, assign",
+        "SELECT d.device_gender, d.io_bank, d.assign, d.description, d.mac, d.in_channel_count,
+                d.out_channel_count, d.max_in_channel_count, d.max_out_channel_count, d.id,
+                b.vendor_id, b.device_id
+         FROM device d LEFT JOIN device_iobox b ON b.id = d.id
+         WHERE d.io_bank >= 0 ORDER BY d.io_bank, d.assign",
     )?;
     let devices = stmt
         .query_map([], |r| {
@@ -603,7 +605,12 @@ fn load_devices(db: &Connection) -> rusqlite::Result<Vec<Device>> {
             let mac: i64 = r.get(4)?;
             let (i, o, mi, mo): (i64, i64, i64, i64) = (r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?);
             let is_daw = gender == 1;
-            let model = desc.unwrap_or_default();
+            // offline devices have no description
+            let ids: (Option<i64>, Option<i64>) = (r.get(10)?, r.get(11)?);
+            let model = desc.filter(|d| !d.is_empty()).unwrap_or_else(|| match ids {
+                (Some(v), Some(d)) => layout::model_by_id(v, d).unwrap_or_default().to_string(),
+                _ => String::new(),
+            });
             let ins = if mi > 0 { mi } else { i }.max(0);
             let outs = if mo > 0 { mo } else { o }.max(0);
             Ok(Device {
