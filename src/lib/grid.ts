@@ -291,6 +291,45 @@ export function deviceToDirectOps(show: ShowState, device: Device) {
   return { ops, skipped };
 }
 
+/**
+ * Ops for a virtual soundcheck: every output of `device` that carries a channel comes back on the
+ * same-numbered input of `device`, patched to Input B of that channel. A channel is carried by its
+ * direct out, or by a device input patched straight to the output (device to device) that feeds the
+ * channel's Input A. If several outputs carry the same channel side, the lowest one wins; the R side
+ * of a mono channel's stereo direct out is ignored. Patches that are already in place are left out.
+ * `skipped` lists outputs that carry a channel but have no input of the same number on `device`.
+ */
+export function returnToInputBOps(show: ShowState, device: Device) {
+  const width = (index: number) => show.inputs.find((s) => s.cluster === CLUSTER.INPUT && s.index === index)?.width ?? 1;
+  const current = new Map(show.routes.map((r) => [dstKey(r.dst), r.src] as const));
+  const ops = new Map<string, PatchOp>();
+  const skipped: string[] = [];
+  const outs = show.routes
+    .filter((r) => r.dst.cluster === CLUSTER.HW_OUT && r.dst.index === device.idx)
+    .sort((a, b) => a.dst.channel - b.dst.channel);
+  for (const { src, dst } of outs) {
+    const channels: Dst[] =
+      src.cluster === CLUSTER.INPUT
+        ? src.channel < width(src.index)
+          ? [{ cluster: CLUSTER.INPUT, index: src.index, section: 1, channel: src.channel }]
+          : []
+        : src.cluster === CLUSTER.HW_IN
+          ? show.routes
+              .filter((r) => r.dst.cluster === CLUSTER.INPUT && r.dst.section === 0 && key(r.src) === key(src))
+              .map((r) => ({ ...r.dst, section: 1 }))
+          : [];
+    if (!channels.length) continue;
+    if (!device.inPorts.some((p) => p.channel === dst.channel)) {
+      skipped.push(portLabel(show.devices, device.idx, dst.channel, true));
+      continue;
+    }
+    const ret: Src = { cluster: CLUSTER.HW_IN, index: device.idx, channel: dst.channel };
+    for (const ch of channels) if (!ops.has(dstKey(ch))) ops.set(dstKey(ch), { dst: ch, src: ret });
+  }
+  const unchanged = (op: PatchOp) => current.get(dstKey(op.dst)) && key(current.get(dstKey(op.dst))!) === key(op.src!);
+  return { ops: [...ops.values()].filter((op) => !unchanged(op)), skipped };
+}
+
 export type CopyPart = "inputs" | "outputs";
 
 /** One channel of a copy from one device to another, for the preview. */

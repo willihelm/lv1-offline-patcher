@@ -18,6 +18,7 @@
     devicePatchList,
     deviceToDirectOps,
     directToDeviceOps,
+    returnToInputBOps,
     inputGrid,
     outputGrid,
     type PatchView,
@@ -304,9 +305,16 @@
       done: (n: number) => `${n} device to device patch${n > 1 ? "es" : ""} converted to direct outs`,
       skip: "feeds no channel",
     },
+    {
+      label: "Return Outputs to Input B",
+      ops: returnToInputBOps,
+      none: "no outputs to return to Input B",
+      done: (n: number) => `${n} channel${n > 1 ? "s" : ""} patched to return on Input B`,
+      skip: "no input with the same number",
+    },
   ];
 
-  /** repatch the outputs of `d`: direct outs from/to the device inputs that feed their channels */
+  /** repatch the outputs of `d` (direct outs from/to the device inputs that feed their channels), or return them to Input B */
   function convert(d: Device, conv: (typeof conversions)[number]) {
     const t = tab;
     const { ops, skipped } = conv.ops(show!, d);

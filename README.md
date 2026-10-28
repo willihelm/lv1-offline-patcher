@@ -20,7 +20,12 @@ all channel direct outs on it straight from the device inputs that feed those ch
 or Input B if A is empty), bypassing the mixer. Channels without an input patch are skipped and listed in
 the status bar. **Convert D2D → DO** goes the other way: every device input
 patched to the device becomes the direct out of the channel it feeds (if several channels use it:
-Input A first, then the lowest channel number). Each conversion is one undo step.
+Input A first, then the lowest channel number). **Return Outputs to Input B** sets up a virtual
+soundcheck: every output of the device that carries a channel (its direct out, or a device input patched
+straight to the output that feeds the channel's Input A) comes back on the input of the same number of that
+device, patched to Input B of the channel. E.g. Bass on output 11 → input 11 → Bass Input B. Outputs
+without an input of the same number are skipped and listed in the status bar. Each conversion is one undo
+step.
 
 **Copy Patch from Device…** opens a dialog that gives a device the patch of another device, channel by
 channel. Choose the two devices and **Inputs** and/or **Outputs**; the preview lists every channel that
