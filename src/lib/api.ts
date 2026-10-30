@@ -38,6 +38,12 @@ export const save = (id: number, path: string | null, force: boolean) =>
 export const exportText = (path: string, contents: string) => call<void>("export_text", { path, contents });
 /** modification time (ms since the epoch) per path, null if the file can't be read */
 export const modifiedTimes = (paths: string[]) => call<(number | null)[]>("modified_times", { paths });
+/** per session of this window: file changed by another program (LV1) since it was read, LV1 has it open */
+export const fileStatus = () => call<{ id: number; changed: boolean; lv1Open: boolean }[]>("file_status");
+/** read the file again, dropping unsaved edits */
+export const reload = (id: number) => call<ShowState>("reload", { id });
+/** stop reporting the current change of the file */
+export const ignoreChange = (id: number) => call<void>("ignore_change", { id });
 /** open the showfile in LV1 (macOS) */
 export const openInLv1 = (id: number) => call<void>("open_in_lv1", { id });
 /** print the window in landscape; the browser prints with its own dialog */

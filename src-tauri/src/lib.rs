@@ -236,6 +236,48 @@ fn save(state: State<AppState>, id: u64, path: Option<String>, force: bool) -> C
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileStatus {
+    id: u64,
+    changed: bool,
+    lv1_open: bool,
+}
+
+/// For each session of the calling window: whether another program (LV1) changed its file
+/// since it was opened, saved or reloaded, and whether LV1 has it open.
+#[tauri::command]
+fn file_status(window: WebviewWindow, state: State<AppState>) -> CmdResult<Vec<FileStatus>> {
+    let sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    Ok(sessions
+        .iter()
+        .filter(|(_, s)| s.window == window.label())
+        .map(|(&id, s)| FileStatus {
+            id,
+            changed: s.show.stamp.changed(&s.show.path),
+            lv1_open: show::wal_in_use(&s.show.path),
+        })
+        .collect())
+}
+
+/// Read the file again; unsaved edits and the undo history are dropped.
+#[tauri::command]
+fn reload(state: State<AppState>, id: u64) -> CmdResult<serde_json::Value> {
+    with_show(&state, id, |s| {
+        *s = Show::open(&s.path.clone())?;
+        view(s)
+    })
+}
+
+/// Keep the session as it is although its file changed: only later changes are reported.
+#[tauri::command]
+fn ignore_change(state: State<AppState>, id: u64) -> CmdResult<()> {
+    with_show(&state, id, |s| {
+        s.stamp = show::FileStamp::of(&s.path);
+        Ok(())
+    })
+}
+
 /// Open the showfile in LV1, like Finder's "Open With". LV1 declares no document types, but
 /// it handles the open event macOS sends it, also when it is already running.
 #[tauri::command]
@@ -373,6 +415,9 @@ pub fn run() {
             save,
             export_text,
             modified_times,
+            file_status,
+            reload,
+            ignore_change,
             open_in_lv1,
             print_landscape
         ])

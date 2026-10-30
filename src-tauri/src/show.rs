@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -201,6 +202,8 @@ struct Edits {
 
 pub struct Show {
     pub path: PathBuf,
+    /// the file as it was read, to notice changes by other programs (LV1)
+    pub stamp: FileStamp,
     snapshot: String,
     /// snapshot the names, colors and taps were read from (the live state if the file has one)
     state_snapshot: Option<i64>,
@@ -246,6 +249,8 @@ impl Show {
         }
         let strips = load_strips(&db, state_snapshot).map_err(err)?;
         let routes = load_routes(&db).map_err(err)?;
+        // closing can fold a leftover -wal into the file, so the stamp is taken afterwards
+        drop(db);
 
         let inputs = strips
             .iter()
@@ -262,6 +267,7 @@ impl Show {
 
         Ok(Show {
             path: path.to_path_buf(),
+            stamp: FileStamp::of(path),
             snapshot,
             state_snapshot,
             devices,
@@ -678,11 +684,37 @@ fn device_name_key(mac: i64, gender: i64) -> String {
     format!("{}#{gender}", bytes.join(":"))
 }
 
-/// A non-empty -wal file means LV1 (or another process) has the show open.
-pub fn wal_in_use(path: &Path) -> bool {
+/// Size and modification time of the showfile and of its -wal file (LV1 writes into that
+/// while it has the show open); `None` where a file is missing.
+#[derive(Clone, PartialEq, Debug)]
+pub struct FileStamp {
+    file: Option<(u64, SystemTime)>,
+    wal: Option<(u64, SystemTime)>,
+}
+
+impl FileStamp {
+    pub fn of(path: &Path) -> FileStamp {
+        let stat = |p: &Path| fs::metadata(p).and_then(|m| Ok((m.len(), m.modified()?))).ok();
+        FileStamp { file: stat(path), wal: stat(&wal_path(path)) }
+    }
+
+    /// Whether the file now at `path` differs from this stamp; a vanished file doesn't count,
+    /// there is nothing to reload.
+    pub fn changed(&self, path: &Path) -> bool {
+        let now = FileStamp::of(path);
+        now.file.is_some() && now != *self
+    }
+}
+
+fn wal_path(path: &Path) -> PathBuf {
     let mut wal = path.as_os_str().to_owned();
     wal.push("-wal");
-    fs::metadata(PathBuf::from(wal)).map(|m| m.len() > 0).unwrap_or(false)
+    PathBuf::from(wal)
+}
+
+/// A non-empty -wal file means LV1 (or another process) has the show open.
+pub fn wal_in_use(path: &Path) -> bool {
+    fs::metadata(wal_path(path)).map(|m| m.len() > 0).unwrap_or(false)
 }
 
 fn backup(path: &Path) -> Result<PathBuf> {
@@ -908,6 +940,22 @@ mod tests {
         let names: Vec<_> = show.inputs.iter().take(4).map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Kick", "Snare", "Vox", "Channel 4"]);
         assert_eq!(show.edits.routes.len(), 8);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn external_change() {
+        let path = sample();
+        let mut show = Show::open(&path).unwrap();
+        assert!(!show.stamp.changed(&path));
+        // own saves are not reported
+        show.apply(&[PatchOp { dst: Dst { cluster: INPUT, index: 1, section: 0, channel: 0 }, src: None }]);
+        show.save(&path, false).unwrap();
+        assert!(!show.stamp.changed(&path));
+        // another program writing into the file is
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        Connection::open(&path).unwrap().execute("DELETE FROM routes", []).unwrap();
+        assert!(show.stamp.changed(&path));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

@@ -275,6 +275,39 @@
     });
   }
 
+  /** read the file again after another program (LV1) changed it */
+  async function reloadFile(t: Tab) {
+    if (t.id === null) return;
+    const id = t.id;
+    if (t.show?.dirty && !(await confirm(`Reloading "${tabTitle(t)}" discards your unsaved changes.`, "Reload"))) return;
+    await run(t, async () => {
+      const s = await api.reload(id);
+      t.changed = false;
+      t.message = `Reloaded ${s.path}`;
+      return s;
+    });
+  }
+
+  async function ignoreChange(t: Tab) {
+    if (t.id === null) return;
+    const id = t.id;
+    await run(t, async () => {
+      await api.ignoreChange(id);
+      t.changed = false;
+    });
+  }
+
+  /** notice files changed outside (e.g. saved by LV1) and whether LV1 has them open */
+  async function checkFiles() {
+    const list = await api.fileStatus().catch(() => []);
+    for (const f of list) {
+      const t = tabs.find((t) => t.id === f.id);
+      if (!t?.show) continue;
+      t.changed = f.changed;
+      t.show.lv1Open = f.lv1Open;
+    }
+  }
+
   function command(c: string) {
     if (c === "new-tab") addTab();
     else if (c === "new-window") api.newWindow().catch((e) => (tab.message = `Error: ${e}`));
@@ -310,6 +343,7 @@
         if (t) activeKey = t.key;
       }),
       win.listen<api.Session>("session-added", (e) => addSession(e.payload)),
+      win.onFocusChanged(({ payload }) => payload && checkFiles()),
       win.onCloseRequested(async (e) => {
         const dirty = tabs.filter((t) => t.show?.dirty);
         if (!dirty.length) return;
@@ -320,7 +354,11 @@
     ];
     // tabs this window was created with (a tab dragged out of another window)
     api.windowSessions().then((list) => list.forEach(addSession));
-    return () => unlisten.forEach((u) => u.then((f) => f()));
+    const poll = setInterval(checkFiles, 2000);
+    return () => {
+      clearInterval(poll);
+      unlisten.forEach((u) => u.then((f) => f()));
+    };
   });
 
   const apply = (ops: PatchOp[]) => runShow((id) => api.patch(id, ops));
@@ -658,6 +696,13 @@
         </button>
       {/if}
       <div class="spacer"></div>
+      {#if tab.changed}
+        <span class="warn">File changed on disk</span>
+        <button onclick={() => reloadFile(tab)} disabled={busy} title="Read the file again{show.dirty ? ', discarding your changes' : ''}">
+          Reload
+        </button>
+        <button onclick={() => ignoreChange(tab)} disabled={busy} title="Keep the version shown here">Ignore</button>
+      {/if}
       {#if show.lv1Open}<span class="warn">LV1 has this file open</span>{/if}
       <button class="primary" onclick={() => saveFile(false)} disabled={!show.dirty || busy} title="Save ({keys.save})">
         Save

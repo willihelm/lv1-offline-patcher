@@ -19,6 +19,8 @@ export class Tab {
   srcDevIdx = $state(-1);
   selected = $state(new Set<number>());
   message = $state("");
+  /** the file was changed by another program (LV1) since it was read */
+  changed = $state(false);
 
   constructor(session?: { id: number; show: ShowState }) {
     if (session) this.load(session);
