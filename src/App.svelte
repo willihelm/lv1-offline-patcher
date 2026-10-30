@@ -364,6 +364,21 @@
     });
   }
 
+  /** device whose name is being typed in */
+  let renaming = $state<number | null>(null);
+
+  function commitDeviceName(d: Device, input: HTMLInputElement) {
+    if (renaming !== d.idx) return;
+    renaming = null;
+    const name = input.value.trim();
+    if (name && name !== d.name) runShow((id) => api.setDeviceName(id, d.idx, name));
+  }
+
+  const focusSelect = (el: HTMLInputElement) => {
+    el.focus();
+    el.select();
+  };
+
   /** device the copy dialog copies to, if open */
   let copyTo = $state<Device | null>(null);
 
@@ -410,6 +425,7 @@
     const separator = () => PredefinedMenuItem.new({ item: "Separator" });
     const items: (MenuItem | Submenu | CheckMenuItem | PredefinedMenuItem)[] = [
       await item(`${deviceNo(d)} ${d.name}`, () => {}, false),
+      await item("Rename…", () => (renaming = d.idx)),
     ];
     if (d.isDaw)
       items.push(
@@ -442,6 +458,7 @@
 
   /** stand-in for the native menu in a plain browser */
   function browserDeviceMenu(d: Device) {
+    if (window.confirm(`${d.name}: Rename…?`)) return void (renaming = d.idx);
     if (window.confirm(`${d.name}: Copy Patch from Device…?`)) return void (copyTo = d);
     if (window.confirm(`${d.name}: Export Patch List?`)) return exportPatchList(d);
     if (d.isDaw) {
@@ -612,7 +629,7 @@
         <button
           class="devmenu"
           disabled={busy}
-          title={`Functions of ${device.name} (or right-click a device):\ndriver channels, export patch list, copy patch,\nConvert DO → D2D: Direct Outs to Device to Device\nConvert D2D → DO: Device to Device to Direct Outs`}
+          title={`Functions of ${device.name} (or right-click a device):\nrename, driver channels, export patch list, copy patch,\nConvert DO → D2D: Direct Outs to Device to Device\nConvert D2D → DO: Device to Device to Direct Outs`}
           onclick={(e) => deviceMenu(e, device, e.currentTarget)}
         >
           {deviceNo(device)} {device.name}
@@ -642,13 +659,27 @@
         <div class="devrow">
           {#each colDevices as d (d.idx)}
             <div class="device" class:daw={d.isDaw} class:active={d.idx === device?.idx}>
+              {#if renaming === d.idx}
+                <input
+                  class="dname"
+                  value={d.name}
+                  maxlength="64"
+                  use:focusSelect
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") commitDeviceName(d, e.currentTarget);
+                    else if (e.key === "Escape") renaming = null;
+                  }}
+                  onblur={(e) => commitDeviceName(d, e.currentTarget)}
+                />
+              {/if}
               <button
                 class="dsel"
-                title={`${d.name}\nRight-click for device functions\n(DO = Direct Out, D2D = Device to Device)`}
+                title={`${d.name}\nDouble-click to rename, right-click for device functions\n(DO = Direct Out, D2D = Device to Device)`}
                 onclick={() => (tab.devIdx = d.idx)}
+                ondblclick={() => (renaming = d.idx)}
                 oncontextmenu={(e) => deviceMenu(e, d)}
               >
-                <div class="dhead">{deviceNo(d)} {d.name}</div>
+                {#if renaming !== d.idx}<div class="dhead">{deviceNo(d)} {d.name}</div>{/if}
                 <div class="dbody">
                   <span class="kind">{d.isDaw ? "DAW" : d.kind}</span>
                   {#if d.isDaw}
@@ -786,6 +817,7 @@
               onpatch={apply}
               ontap={(cluster, index, tap) => runShow((id) => api.setTap(id, cluster, index, tap))}
               onpreamp={(idx, channel, gain, phantom) => runShow((id) => api.setPreamp(id, idx, channel, gain, phantom))}
+              onrename={(cluster, index, name) => runShow((id) => api.setName(id, cluster, index, name))}
               corner={tools}
             />
           </div>
@@ -1080,6 +1112,17 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .dname {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 0;
+    background: #111;
+    color: var(--text);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
   .device.daw .dhead {
     background: #2bd17e;

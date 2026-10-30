@@ -12,6 +12,7 @@
     onpatch,
     ontap,
     onpreamp,
+    onrename,
     corner,
   }: {
     grid: Grid;
@@ -20,6 +21,7 @@
     hover?: { r: number; c: number } | null;
     onpatch: (ops: PatchOp[]) => void;
     ontap: (cluster: number, index: number, tap: number) => void;
+    onrename: (cluster: number, index: number, name: string) => void;
     /** null leaves the value unchanged */
     onpreamp: (device: number, channel: number, gain: number | null, phantom: boolean | null) => void;
     /** Rendered in the empty top-left corner above the row titles. */
@@ -59,6 +61,45 @@
     el.focus();
     el.select();
   };
+
+  /** row whose channel name is being typed in */
+  let naming = $state<number | null>(null);
+
+  const stripOf = (r: number) => {
+    const row = grid.rows[r];
+    return row?.heading === undefined ? row?.strip : undefined;
+  };
+  /** first row of each channel that can be renamed (a stereo channel has two rows) */
+  const nameRows = $derived(
+    grid.rows.flatMap((_, r) => {
+      const s = stripOf(r);
+      const prev = stripOf(r - 1);
+      return s && !(prev && prev.cluster === s.cluster && prev.index === s.index) ? [r] : [];
+    }),
+  );
+
+  function commitName(r: number, input: HTMLInputElement) {
+    if (naming !== r) return;
+    naming = null;
+    const row = grid.rows[r];
+    const name = input.value.trim();
+    if (row?.heading === undefined && row?.strip && name && name !== row.label) onrename(row.strip.cluster, row.strip.index, name);
+  }
+
+  function nameKey(r: number, e: KeyboardEvent) {
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      commitName(r, e.currentTarget as HTMLInputElement);
+      // Tab moves on to the next channel
+      if (e.key === "Tab") {
+        const i = nameRows.findIndex((n) => n >= r);
+        const next = nameRows[e.shiftKey ? i - 1 : nameRows[i] === r ? i + 1 : i];
+        if (next !== undefined) naming = next;
+      }
+    } else if (e.key === "Escape") {
+      naming = null;
+    }
+  }
 
   let matrix: HTMLDivElement;
   let drag = $state<{ r0: number; c0: number; r1: number; c1: number; erase: boolean } | null>(null);
@@ -249,7 +290,25 @@
             onclick={(e) => selectRow(r, e)}
           >
             <span class="swatch" style:background={row.color}>{row.number}</span>
-            <span class="name">{row.label}</span>
+            {#if naming === r}
+              <input
+                class="name-input"
+                value={row.label}
+                maxlength="64"
+                use:focusSelect
+                onclick={(e) => e.stopPropagation()}
+                ondblclick={(e) => e.stopPropagation()}
+                onkeydown={(e) => nameKey(r, e)}
+                onblur={(e) => commitName(r, e.currentTarget)}
+              />
+            {:else}
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <span
+                class="name"
+                title={row.strip ? `${row.label}\nDouble-click to rename` : undefined}
+                ondblclick={() => row.strip && (naming = nameRows.filter((n) => n <= r).pop() ?? r)}
+              >{row.label}</span>
+            {/if}
             {#if row.kind}<span class="kind">{row.kind}</span>{/if}
             {#if row.note}
               {@const [, head, tail] = row.note.match(/^(.*?)(\s*\S+)$/) ?? ["", row.note, ""]}
@@ -549,6 +608,20 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .name-input {
+    flex: 1;
+    min-width: 0;
+    align-self: stretch;
+    margin-left: 4px;
+    padding: 0 4px;
+    font: inherit;
+    font-weight: 600;
+    background: #111;
+    color: var(--text);
+    border: 0;
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
   .kind {
     font-size: 12px;

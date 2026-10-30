@@ -26,6 +26,8 @@ export interface DataRow {
   color: string;
   /** port type of hardware rows, e.g. "An Mic/L" */
   kind?: string;
+  /** channel or bus the row belongs to, for renaming */
+  strip?: { cluster: number; index: number };
   /** output source setting of direct outs/busses */
   tap?: { cluster: number; index: number; value: number };
   src?: Src;
@@ -95,6 +97,7 @@ function stripRows(strips: Strip[], make: (s: Strip, ch: number) => Partial<Data
         number: s.cluster === CLUSTER.TALKBACK ? "TB" : String(s.index + 1),
         side: sideLabel(s.width, ch),
         color: stripColor(s.color),
+        strip: { cluster: s.cluster, index: s.index },
         ...make(s, ch),
       });
     }

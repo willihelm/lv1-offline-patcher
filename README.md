@@ -54,6 +54,11 @@ Tab moves to the next input, Esc cancels. Gain can be edited on the IOS-XL and I
 in 0.5 dB steps) and on the IONIC 16/24 and LV1 Classic (0 to +60 dB in 1 dB steps). Other
 devices show their gain read-only because their range isn't known yet.
 
+Double-click a channel or bus name in the Input or Output view to rename it: Enter confirms, Tab moves to
+the next channel, Esc cancels. Rename a device by double-clicking it or with **Rename…** in the device menu.
+Names are written to the live state of the show; snapshots stored in the file keep
+their names. Each rename is one undo step.
+
 Click a cell to patch or unpatch it. Drag diagonally to patch a range; a drag that starts on a
 patched cell unpatches instead. Click row names to select them (shift for a range, ⌘/Ctrl to
 toggle), then press **Delete**. ⌘Z / ⇧⌘Z undo and redo, ⌘S saves, ⇧⌘S saves a patched copy

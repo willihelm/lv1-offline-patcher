@@ -25,6 +25,10 @@ export const undo = (id: number) => call<ShowState>("undo", { id });
 export const redo = (id: number) => call<ShowState>("redo", { id });
 export const setTap = (id: number, cluster: number, index: number, tap: number) =>
   call<ShowState>("set_tap", { id, cluster, index, tap });
+export const setName = (id: number, cluster: number, index: number, name: string) =>
+  call<ShowState>("set_name", { id, cluster, index, name });
+export const setDeviceName = (id: number, idx: number, name: string) =>
+  call<ShowState>("set_device_name", { id, idx, name });
 export const setDriverChannels = (id: number, idx: number, count: number) =>
   call<ShowState>("set_driver_channels", { id, idx, count });
 export const setPreamp = (id: number, idx: number, channel: number, gain: number | null, phantom: boolean | null) =>

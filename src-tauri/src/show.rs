@@ -1,7 +1,8 @@
 //! Reading and writing the patch of a Waves LV1 showfile (.emo, an SQLite database).
 //!
-//! Modified are the `routes` table, the direct-out source (tap point) of the live mixer state
-//! and the preamp settings (gain, 48V) of the I/O devices in the live state. Edits are kept in memory (with undo/redo) and written back in one transaction on
+//! Modified are the `routes` table, the direct-out source (tap point) and the names of the
+//! channels and busses in the live mixer state, the device names and the preamp settings
+//! (gain, 48V) of the I/O devices in the live state. Edits are kept in memory (with undo/redo) and written back in one transaction on
 //! save, after a backup of the file was made.
 
 use std::collections::{HashMap, HashSet};
@@ -61,6 +62,11 @@ pub struct Device {
     pub gain_range: Option<GainRange>,
     #[serde(skip)]
     db_id: i64,
+    /// key of the name in table device_name, with `gender`
+    #[serde(skip)]
+    mac: i64,
+    #[serde(skip)]
+    gender: i64,
     #[serde(skip)]
     model: String,
     #[serde(skip)]
@@ -168,7 +174,7 @@ pub struct ShowView<'a> {
     pub path: String,
     pub snapshot: String,
     pub devices: Vec<Device>,
-    pub inputs: &'a [Strip],
+    pub inputs: Vec<Strip>,
     pub sources: Vec<Strip>,
     pub routes: &'a [Route],
     pub dirty: bool,
@@ -187,11 +193,17 @@ struct Edits {
     driver_channels: HashMap<i64, i64>,
     /// preamp settings per (device idx, channel), only where changed
     preamps: HashMap<(i64, i64), Preamp>,
+    /// name per (cluster, index) of channels and busses, only where changed
+    names: HashMap<(i64, i64), String>,
+    /// name per device idx, only where changed
+    device_names: HashMap<i64, String>,
 }
 
 pub struct Show {
     pub path: PathBuf,
     snapshot: String,
+    /// snapshot the names, colors and taps were read from (the live state if the file has one)
+    state_snapshot: Option<i64>,
     devices: Vec<Device>,
     inputs: Vec<Strip>,
     sources: Vec<Strip>,
@@ -251,11 +263,19 @@ impl Show {
         Ok(Show {
             path: path.to_path_buf(),
             snapshot,
+            state_snapshot,
             devices,
             inputs,
             sources,
             original_ids: routes.iter().filter_map(|r| r.id).collect(),
-            edits: Edits { routes, taps, driver_channels: HashMap::new(), preamps: HashMap::new() },
+            edits: Edits {
+                routes,
+                taps,
+                driver_channels: HashMap::new(),
+                preamps: HashMap::new(),
+                names: HashMap::new(),
+                device_names: HashMap::new(),
+            },
             undo: Vec::new(),
             redo: Vec::new(),
         })
@@ -267,14 +287,15 @@ impl Show {
             .iter()
             .map(|s| {
                 let tap = self.tap(s);
-                Strip { width: s.source_width(tap), tap: Some(tap), ..s.clone() }
+                Strip { width: s.source_width(tap), tap: Some(tap), name: self.name(s).to_string(), ..s.clone() }
             })
             .collect();
+        let inputs = self.inputs.iter().map(|s| Strip { name: self.name(s).to_string(), ..s.clone() }).collect();
         ShowView {
             path: self.path.display().to_string(),
             snapshot: self.snapshot.clone(),
             devices: self.devices.iter().map(|d| self.device(d)).collect(),
-            inputs: &self.inputs,
+            inputs,
             sources,
             routes: &self.edits.routes,
             dirty: self.dirty(),
@@ -284,12 +305,15 @@ impl Show {
         }
     }
 
-    /// The device with the edited driver channel count and preamps applied.
+    /// The device with the edited name, driver channel count and preamps applied.
     fn device(&self, d: &Device) -> Device {
         let mut d = match self.edits.driver_channels.get(&d.idx) {
             Some(&n) => d.with_channels(n, n),
             None => d.clone(),
         };
+        if let Some(name) = self.edits.device_names.get(&d.idx) {
+            d.name = name.clone();
+        }
         for p in &mut d.preamps {
             if let Some(edit) = self.edits.preamps.get(&(d.idx, p.channel)) {
                 *p = edit.clone();
@@ -314,6 +338,28 @@ impl Show {
         })
     }
 
+    /// Devices whose name differs from the file, with the edited name.
+    fn changed_device_names(&self) -> impl Iterator<Item = (&Device, &str)> {
+        self.devices.iter().filter_map(|d| {
+            let name = self.edits.device_names.get(&d.idx)?;
+            (*name != d.name).then_some((d, name.as_str()))
+        })
+    }
+
+    fn name<'a>(&'a self, s: &'a Strip) -> &'a str {
+        self.edits.names.get(&(s.cluster, s.index)).unwrap_or(&s.name)
+    }
+
+    /// Channels and busses whose name differs from the file, each once, with the edited name.
+    fn changed_names(&self) -> impl Iterator<Item = (&Strip, &str)> {
+        let inputs = self.inputs.iter();
+        let sources = self.sources.iter().filter(|s| !self.inputs.iter().any(|i| i.obj_id == s.obj_id));
+        inputs.chain(sources).filter_map(|s| {
+            let name = self.edits.names.get(&(s.cluster, s.index))?;
+            (*name != s.name).then_some((s, name.as_str()))
+        })
+    }
+
     fn tap(&self, s: &Strip) -> i64 {
         self.edits.taps.get(&(s.cluster, s.index)).copied().unwrap_or(s.default_tap)
     }
@@ -333,6 +379,8 @@ impl Show {
             || self.changed_taps().next().is_some()
             || self.changed_drivers().next().is_some()
             || self.changed_preamps().next().is_some()
+            || self.changed_names().next().is_some()
+            || self.changed_device_names().next().is_some()
     }
 
     fn checkpoint(&mut self) {
@@ -368,6 +416,35 @@ impl Show {
         if self.edits.taps.get(&(cluster, index)) != Some(&tap) {
             self.checkpoint();
             self.edits.taps.insert((cluster, index), tap);
+        }
+        Ok(())
+    }
+
+    /// Rename a channel or bus.
+    pub fn set_name(&mut self, cluster: i64, index: i64, name: &str) -> Result<()> {
+        let name = valid_name(name)?;
+        let Some(strip) = self.inputs.iter().chain(&self.sources).find(|s| s.cluster == cluster && s.index == index) else {
+            return Err(format!("Unknown channel {cluster}/{index}"));
+        };
+        if self.name(strip) != name {
+            self.checkpoint();
+            self.edits.names.insert((cluster, index), name);
+        }
+        Ok(())
+    }
+
+    /// Rename a device.
+    pub fn set_device_name(&mut self, idx: i64, name: &str) -> Result<()> {
+        let name = valid_name(name)?;
+        let Some(dev) = self.devices.iter().find(|d| d.idx == idx) else {
+            return Err(format!("Unknown device {idx}"));
+        };
+        if dev.mac <= 0 {
+            return Err(format!("{} cannot be renamed: it has no MAC address in the file", dev.name));
+        }
+        if self.device(dev).name != name {
+            self.checkpoint();
+            self.edits.device_names.insert(idx, name);
         }
         Ok(())
     }
@@ -500,6 +577,30 @@ impl Show {
             )
             .map_err(err)?;
         }
+        for (strip, name) in self.changed_names() {
+            // the name of the state the strips were read from; objects without one keep it in object
+            let n = tx
+                .execute(
+                    "UPDATE snapshot_chainer SET name = ?1 WHERE chainer_id = ?2 AND snapshot_id = ?3",
+                    params![name, strip.obj_id, self.state_snapshot.unwrap_or(ACTIVE_SNAPSHOT)],
+                )
+                .map_err(err)?;
+            if n == 0 {
+                tx.execute("UPDATE object SET name = ?1 WHERE id = ?2", params![name, strip.obj_id]).map_err(err)?;
+            }
+        }
+        for (dev, name) in self.changed_device_names() {
+            let n = tx
+                .execute("UPDATE device_name SET name = ?1 WHERE mac = ?2 AND gender = ?3", params![name, dev.mac, dev.gender])
+                .map_err(err)?;
+            if n == 0 {
+                tx.execute(
+                    "INSERT INTO device_name (mac, gender, key, name) VALUES (?1, ?2, ?3, ?4)",
+                    params![dev.mac, dev.gender, device_name_key(dev.mac, dev.gender), name],
+                )
+                .map_err(err)?;
+            }
+        }
         // LV1 keeps the driver channel count per DAW in the device row and per bank/slot in
         // default_driver_channel_counts (missing in older files)
         let has_defaults: bool = tx
@@ -560,6 +661,21 @@ impl Show {
         db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).map_err(err)?;
         Ok(())
     }
+}
+
+/// Trimmed name; an empty one is refused.
+fn valid_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("The name must not be empty".into());
+    }
+    Ok(name.to_string())
+}
+
+/// device_name.key as LV1 writes it: the MAC in hex and the gender, e.g. "00:1c:d1:aa:00:01#0"
+fn device_name_key(mac: i64, gender: i64) -> String {
+    let bytes: Vec<String> = (0..6).rev().map(|i| format!("{:02x}", (mac >> (i * 8)) & 0xff)).collect();
+    format!("{}#{gender}", bytes.join(":"))
 }
 
 /// A non-empty -wal file means LV1 (or another process) has the show open.
@@ -625,6 +741,8 @@ fn load_devices(db: &Connection) -> rusqlite::Result<Vec<Device>> {
                 preamps: Vec::new(),
                 gain_range: None,
                 db_id: r.get(9)?,
+                mac,
+                gender,
                 model,
                 iom: None,
             })
@@ -937,6 +1055,55 @@ mod tests {
         assert_eq!((total, n, refs), (chunks, 2, 2));
         drop(db);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn names() {
+        let path = sample();
+        let mut show = Show::open(&path).unwrap();
+        let input = |show: &Show, idx: i64| show.view().inputs.into_iter().find(|s| s.cluster == INPUT && s.index == idx).unwrap();
+        let source = |show: &Show, cluster: i64, idx: i64| {
+            show.view().sources.into_iter().find(|s| s.cluster == cluster && s.index == idx).unwrap()
+        };
+        assert!(show.set_name(INPUT, 0, "  ").is_err());
+        assert!(show.set_name(HW_IN, 0, "X").is_err());
+        assert!(show.set_device_name(99, "X").is_err());
+        show.set_name(INPUT, 0, "Kick").unwrap();
+        assert!(!show.dirty() && show.undo.is_empty());
+
+        show.set_name(INPUT, 0, " Bass Drum ").unwrap();
+        show.set_name(3, 0, "PA").unwrap();
+        show.set_device_name(1, "FOH Rack").unwrap();
+        // the channel is an input and a direct out source
+        assert_eq!((input(&show, 0).name.as_str(), source(&show, INPUT, 0).name.as_str()), ("Bass Drum", "Bass Drum"));
+        assert_eq!(dev(&show, "FOH Rack").idx, 1);
+        show.undo();
+        assert_eq!(dev(&show, "Stage IOS-XL").idx, 1);
+        show.undo();
+        show.undo();
+        assert!(!show.dirty());
+        show.redo();
+        show.redo();
+        show.redo();
+
+        show.save(&path, false).unwrap();
+        let reread = Show::open(&path).unwrap();
+        assert!(!reread.dirty());
+        assert_eq!(input(&reread, 0).name, "Bass Drum");
+        assert_eq!(input(&reread, 1).name, "Snare");
+        assert_eq!(source(&reread, 3, 0).name, "PA");
+        assert_eq!(dev(&reread, "FOH Rack").kind, "IOS-XL");
+        let db = Connection::open(&path).unwrap();
+        let rows: i64 = db.query_row("SELECT count(*) FROM device_name", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 4);
+        drop(db);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn name_key() {
+        assert_eq!(device_name_key(123776663553, 0), "00:1c:d1:aa:00:01#0");
+        assert_eq!(device_name_key(2199023255553, 1), "02:00:00:00:00:01#1");
     }
 
     /// Writes the UI state of the test session to public/demo.json for the browser mock:

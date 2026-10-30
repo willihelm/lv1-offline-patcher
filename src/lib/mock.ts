@@ -89,6 +89,16 @@ function run<T>(cmd: string, args: Record<string, any>): T {
       if (s) s.tap = args.tap;
       break;
     }
+    case "set_name": {
+      for (const s of [...show!.inputs, ...show!.sources])
+        if (s.cluster === args.cluster && s.index === args.index) s.name = args.name.trim();
+      break;
+    }
+    case "set_device_name": {
+      const d = show!.devices.find((x) => x.idx === args.idx);
+      if (d) d.name = args.name.trim();
+      break;
+    }
     case "set_driver_channels": {
       const d = show!.devices.find((x) => x.idx === args.idx);
       if (!d) break;

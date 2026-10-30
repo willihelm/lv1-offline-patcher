@@ -165,6 +165,24 @@ fn set_tap(state: State<AppState>, id: u64, cluster: i64, index: i64, tap: i64) 
     })
 }
 
+/// Rename a channel or bus.
+#[tauri::command]
+fn set_name(state: State<AppState>, id: u64, cluster: i64, index: i64, name: String) -> CmdResult<serde_json::Value> {
+    with_show(&state, id, |s| {
+        s.set_name(cluster, index, &name)?;
+        view(s)
+    })
+}
+
+/// Rename a device.
+#[tauri::command]
+fn set_device_name(state: State<AppState>, id: u64, idx: i64, name: String) -> CmdResult<serde_json::Value> {
+    with_show(&state, id, |s| {
+        s.set_device_name(idx, &name)?;
+        view(s)
+    })
+}
+
 /// Set the number of driver channels (inputs and outputs) of a DAW device.
 #[tauri::command]
 fn set_driver_channels(state: State<AppState>, id: u64, idx: i64, count: i64) -> CmdResult<serde_json::Value> {
@@ -324,6 +342,8 @@ pub fn run() {
             undo,
             redo,
             set_tap,
+            set_name,
+            set_device_name,
             set_driver_channels,
             set_preamp,
             save,
