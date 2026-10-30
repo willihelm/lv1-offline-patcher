@@ -44,6 +44,8 @@ export async function invoke<T>(cmd: string, args: Record<string, any>): Promise
       return undefined as T;
     case "move_session":
       throw "Moving tabs between windows needs the desktop app";
+    case "open_in_lv1":
+      throw "Opening in LV1 needs the desktop app";
     case "modified_times":
       return args.paths.map(() => null) as T;
   }

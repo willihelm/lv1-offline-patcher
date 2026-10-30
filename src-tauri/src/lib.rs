@@ -236,6 +236,30 @@ fn save(state: State<AppState>, id: u64, path: Option<String>, force: bool) -> C
     })
 }
 
+/// Open the showfile in LV1, like Finder's "Open With". LV1 declares no document types, but
+/// it handles the open event macOS sends it, also when it is already running.
+#[tauri::command]
+fn open_in_lv1(state: State<AppState>, id: u64) -> CmdResult<()> {
+    let path = with_show(&state, id, |s| Ok(s.path.clone()))?;
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("open")
+            .args(["-b", "com.WavesAudio.eMotion-LV1"])
+            .arg(&path)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(format!("LV1 could not be started: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Err("Opening in LV1 is only supported on macOS".into())
+    }
+}
+
 /// Print the window in landscape (the stage box panels are wide). WebKit ignores `@page { size }`
 /// and prints with the app's shared NSPrintInfo, so the orientation is set there; the print
 /// dialog can still change it.
@@ -349,6 +373,7 @@ pub fn run() {
             save,
             export_text,
             modified_times,
+            open_in_lv1,
             print_landscape
         ])
         .run(tauri::generate_context!())

@@ -254,6 +254,27 @@
     });
   }
 
+  /** open the showfile in LV1; unsaved changes are saved first, LV1 reads the file */
+  async function openInLv1() {
+    const t = tab;
+    if (!t.show || t.id === null) return;
+    const id = t.id;
+    if (t.show.dirty) {
+      const ok = await ask(`"${tabTitle(t)}" has unsaved changes. LV1 only sees them once they are saved.`, {
+        title: "Open in LV1",
+        kind: "warning",
+        okLabel: "Save & Open",
+      });
+      if (!ok) return;
+      await saveFile(false);
+      if (t.show?.dirty) return; // saving failed or was cancelled
+    }
+    await run(t, async () => {
+      await api.openInLv1(id);
+      t.message = "Opened in LV1. Save here only after closing it there.";
+    });
+  }
+
   function command(c: string) {
     if (c === "new-tab") addTab();
     else if (c === "new-window") api.newWindow().catch((e) => (tab.message = `Error: ${e}`));
@@ -642,6 +663,9 @@
         Save
       </button>
       <button onclick={() => saveFile(true)} disabled={busy} title="Save patched copy ({keys.saveAs})">Save As…</button>
+      {#if mac}
+        <button onclick={openInLv1} disabled={busy} title="Open this showfile in eMotion LV1">Open in LV1</button>
+      {/if}
     {/if}
   </header>
 
