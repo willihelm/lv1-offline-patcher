@@ -15,7 +15,7 @@ import {
   type Strip,
 } from "./types";
 
-export type PatchView = "input" | "output" | "d2d" | "list";
+export type PatchView = "input" | "output" | "d2d" | "list" | "stagebox";
 export type OutputTab = "direct" | "busses";
 
 export interface DataRow {
@@ -416,8 +416,17 @@ function stripLabel(show: ShowState, a: { cluster: number; index: number; channe
   return [prefix, strip?.name ?? (prefix ? "" : CLUSTER_LABEL[a.cluster]), side].filter(Boolean).join(" ");
 }
 
+/** e.g. "Kick", "Voc Verb L"; undefined if the strip has no name */
+function stripName(a: { cluster: number; index: number; channel: number }, strips: Strip[]) {
+  const strip = strips.find((s) => s.cluster === a.cluster && s.index === a.index);
+  if (!strip?.name) return undefined;
+  return strip.width === 2 ? `${strip.name} ${a.channel === 0 ? "L" : "R"}` : strip.name;
+}
+
 export interface ListEntry {
   label: string;
+  /** channel or bus name without its number, for the stage box */
+  name?: string;
   /** channel color, for channels and busses */
   color?: string;
   /** device to device: the mixer channels the same device input feeds */
@@ -445,6 +454,7 @@ export function devicePatchList(show: ShowState, device: Device) {
       ? { label: portLabel(show.devices, d.index, d.channel, true) }
       : {
           label: `${stripLabel(show, d, show.inputs)}${d.cluster === CLUSTER.INPUT ? ` (Input ${d.section === 1 ? "B" : "A"})` : ""}`,
+          name: stripName(d, show.inputs)?.concat(d.cluster === CLUSTER.INPUT && d.section === 1 ? " (B)" : ""),
           color: color(show.inputs, d),
         };
   const channelsOf = (s: Src) =>
@@ -455,7 +465,7 @@ export function devicePatchList(show: ShowState, device: Device) {
   const srcEntry = (s: Src): ListEntry =>
     s.cluster === CLUSTER.HW_IN
       ? { label: portLabel(show.devices, s.index, s.channel, false), channels: channelsOf(s) }
-      : { label: stripLabel(show, s, show.sources), color: color(show.sources, s) };
+      : { label: stripLabel(show, s, show.sources), name: stripName(s, show.sources), color: color(show.sources, s) };
   const inputs: ListRow[] = device.inPorts.map((port) => ({
     channel: port.channel + 1,
     type: type(port),
@@ -472,6 +482,47 @@ export function devicePatchList(show: ShowState, device: Device) {
     return { channel: port.channel + 1, type: type(port), port: port.label, patch: src ? [srcEntry(src)] : [] };
   });
   return { inputs, outputs };
+}
+
+/** One connector on the stage box: a mono port, or a stereo pair (phones, AES) on one connector. */
+export interface Socket {
+  label: string;
+  /** one line per channel of the connector; `side` is "L"/"R" for pairs */
+  lines: { side: string; patch: ListEntry[] }[];
+  /** 48V of a mic input, null if the input has no phantom power */
+  phantom: boolean | null;
+}
+
+/** Ports of one type in a row, e.g. the "Analog Mic/L" inputs. */
+export interface SocketBank {
+  type: string;
+  sockets: Socket[];
+}
+
+/** Rows of the patch list as connectors grouped by port type, for the stage box view. */
+export function socketBanks(rows: ListRow[]): SocketBank[] {
+  const banks: SocketBank[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    let bank = banks[banks.length - 1];
+    if (bank?.type !== r.type) banks.push((bank = { type: r.type, sockets: [] }));
+    const next = rows[i + 1];
+    const pair = r.port.match(/^(\d*)L$/);
+    if (pair && next?.type === r.type && next.port === `${pair[1]}R`) {
+      bank.sockets.push({
+        label: pair[1] || "1",
+        lines: [
+          { side: "L", patch: r.patch },
+          { side: "R", patch: next.patch },
+        ],
+        phantom: null,
+      });
+      i++;
+    } else {
+      bank.sockets.push({ label: r.port, lines: [{ side: "", patch: r.patch }], phantom: r.preamp?.phantom ?? null });
+    }
+  }
+  return banks;
 }
 
 /** Patch list of `device` as CSV (semicolon separated with decimal comma, for Excel/Numbers). */

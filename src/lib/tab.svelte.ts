@@ -1,4 +1,5 @@
 import type { OutputTab, PatchView } from "./grid";
+import type { BoxFace } from "./panels";
 import type { ShowState } from "./types";
 
 let nextKey = 0;
@@ -13,6 +14,7 @@ export class Tab {
   section = $state(0);
   outputTab = $state<OutputTab>("direct");
   listPart = $state<"all" | "inputs" | "outputs">("all");
+  boxFace = $state<BoxFace>("both");
   devIdx = $state(-1);
   srcDevIdx = $state(-1);
   selected = $state(new Set<number>());

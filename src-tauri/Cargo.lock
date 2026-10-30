@@ -1779,6 +1779,7 @@ name = "lv1-offline-patcher"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "objc2-app-kit",
  "rusqlite",
  "serde",
  "serde_json",

@@ -15,6 +15,17 @@ body {
   overflow: hidden;
 }
 
+@media print {
+  :root {
+    color-scheme: light;
+    color: #000;
+    background: #fff;
+  }
+  body {
+    overflow: visible;
+  }
+}
+
 button {
   font: inherit;
   font-size: 13px;

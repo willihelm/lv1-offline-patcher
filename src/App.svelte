@@ -5,10 +5,12 @@
   import { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/menu";
   import { getAllWebviewWindows, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { ask, open, save as saveDialog } from "@tauri-apps/plugin-dialog";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import * as api from "./lib/api";
   import PatchGrid from "./lib/PatchGrid.svelte";
   import PatchList from "./lib/PatchList.svelte";
+  import StageBox from "./lib/StageBox.svelte";
+  import { panelFor } from "./lib/panels";
   import CopyDialog from "./lib/CopyDialog.svelte";
   import * as recent from "./lib/recent";
   import {
@@ -51,24 +53,45 @@
     ["output", "Output"],
     ["d2d", "Device to\nDevice"],
     ["list", "List"],
+    ["stagebox", "Stage\nBox"],
   ];
+  // views that show inputs and outputs of the device together
+  const ioView = (v: PatchView) => v === "list" || v === "stagebox";
 
-  // devices that have channels in the direction the column side of the matrix needs (the list shows both)
+  // devices that have channels in the direction the column side of the matrix needs (the list shows both,
+  // the stage box only devices with connectors)
   const colDevices = $derived(
-    show?.devices.filter((d) => (tab.view === "list" ? d.ins + d.outs : tab.view === "input" ? d.ins : d.outs) > 0) ?? [],
+    show?.devices.filter(
+      (d) =>
+        (tab.view === "stagebox" ? !d.isDaw : true) &&
+        (ioView(tab.view) ? d.ins + d.outs : tab.view === "input" ? d.ins : d.outs) > 0,
+    ) ?? [],
   );
   const rowDevices = $derived(show?.devices.filter((d) => d.ins > 0) ?? []);
   const device = $derived(colDevices.find((d) => d.idx === tab.devIdx) ?? colDevices[0]);
   const srcDevice = $derived(rowDevices.find((d) => d.idx === tab.srcDevIdx) ?? rowDevices[0]);
 
   const grid = $derived.by(() => {
-    if (!show || !device || tab.view === "list") return null;
+    if (!show || !device || ioView(tab.view)) return null;
     if (tab.view === "input") return inputGrid(show, device, tab.section);
     if (tab.view === "output") return outputGrid(show, device, tab.outputTab);
     return srcDevice ? deviceGrid(show, srcDevice, device) : null;
   });
 
-  const patchList = $derived(show && device && tab.view === "list" ? devicePatchList(show, device) : null);
+  const patchList = $derived(show && device && ioView(tab.view) ? devicePatchList(show, device) : null);
+
+  // "Print All…" puts every stage box on its own page; the pages are only rendered while that is the print job
+  let printAll = $state(false);
+  const allBoxes = $derived(
+    show && printAll
+      ? show.devices.filter((d) => !d.isDaw && d.ins + d.outs > 0).map((d) => ({ device: d, list: devicePatchList(show!, d) }))
+      : [],
+  );
+  async function printBoxes(all: boolean) {
+    printAll = all;
+    await tick();
+    await api.printLandscape();
+  }
 
   const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
   const dirName = (p: string) => p.slice(0, p.length - baseName(p).length).replace(/[\\/]$/, "");
@@ -632,7 +655,7 @@
                     <span class="io">{d.ins === d.outs ? `${d.ins} ch` : `${d.ins} in / ${d.outs} out`}</span>
                   {:else}
                     <span class="io">
-                      {tab.view === "list"
+                      {ioView(tab.view)
                         ? `${d.inPorts.length} in / ${d.outPorts.length} out`
                         : tab.view === "input"
                           ? d.inPorts.length + " in"
@@ -652,7 +675,11 @@
         {#if tab.view === "input"}
           <button class="big" class:active={tab.section === 0} onclick={() => (tab.section = 0)}>Input A</button>
           <button class="big" class:active={tab.section === 1} onclick={() => (tab.section = 1)}>Input B</button>
-        {:else if tab.view === "list"}
+        {:else if tab.view === "stagebox" && device && panelFor(device.kind)}
+          {#each [["both", "Front &\nBack"], ["front", "Front"], ["back", "Back"]] as const as [f, label]}
+            <button class="big" class:active={tab.boxFace === f} onclick={() => (tab.boxFace = f)}>{label}</button>
+          {/each}
+        {:else if ioView(tab.view)}
           {#each [["all", "All"], ["inputs", "Inputs"], ["outputs", "Outputs"]] as const as [p, label]}
             <button class="big" class:active={tab.listPart === p} onclick={() => (tab.listPart = p)}>{label}</button>
           {/each}
@@ -701,7 +728,46 @@
         </div>
       {/snippet}
       <div class="panel gridpanel">
-        {#if patchList && device}
+        {#if patchList && device && tab.view === "stagebox"}
+          <div class="listhead">
+            <div class="where">
+              <strong>{deviceNo(device)} {device.name}</strong>
+              <span>Stage box layout · {fileName}</span>
+            </div>
+            <div class="noprint printbtns">
+              <button onclick={() => printBoxes(false)}>Print…</button>
+              <button onclick={() => printBoxes(true)} title="Every stage box of the show, one per page">Print All…</button>
+            </div>
+          </div>
+          <StageBox
+            model={device.kind}
+            inputs={patchList.inputs}
+            outputs={patchList.outputs}
+            part={tab.listPart}
+            face={tab.boxFace}
+          />
+          {#if allBoxes.length}
+            <div class="printall">
+              {#each allBoxes as b (b.device.idx)}
+                <div class="printpage">
+                  <div class="listhead">
+                    <div class="where">
+                      <strong>{deviceNo(b.device)} {b.device.name}</strong>
+                      <span>Stage box layout · {fileName}</span>
+                    </div>
+                  </div>
+                  <StageBox
+                    model={b.device.kind}
+                    inputs={b.list.inputs}
+                    outputs={b.list.outputs}
+                    part={tab.listPart}
+                    face={tab.boxFace}
+                  />
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {:else if patchList && device}
           <div class="listhead">
             <div class="where">
               <strong>{deviceNo(device)} {device.name}</strong>
@@ -1310,5 +1376,55 @@
     color: var(--text-dim);
     padding: 0 4px;
     min-height: 16px;
+  }
+  .printbtns {
+    display: flex;
+    gap: 8px;
+  }
+  .printall {
+    display: none;
+  }
+
+  /* printing is offered in the stage box view: only the device's panel goes on paper */
+  @media print {
+    @page {
+      size: landscape;
+      margin: 10mm;
+    }
+    main {
+      display: block;
+      height: auto;
+      padding: 0;
+    }
+    main > :not(.work),
+    .side,
+    :global(.noprint) {
+      display: none !important;
+    }
+    .work,
+    .gridpanel {
+      display: block;
+      background: none;
+      padding: 0;
+    }
+    .where span {
+      color: #555;
+    }
+    .listhead {
+      padding: 0;
+    }
+    /* Print All: only the pages, one stage box each */
+    .gridpanel:has(.printall) > :global(:not(.printall)) {
+      display: none;
+    }
+    .printall {
+      display: block;
+    }
+    .printpage {
+      break-after: page;
+    }
+    .printpage:last-child {
+      break-after: auto;
+    }
   }
 </style>

@@ -12,6 +12,13 @@ without the I/O hardware being online. The UI follows LV1's Patch page:
 - **List**: everything patched on one device as a list: each input with gain, 48V and what it feeds, each
   output with its source (All / Inputs / Outputs). If an output comes straight from a device input (device to
   device), the list also shows the mixer channels that input feeds. **Export CSV…** saves it as a file
+- **Stage Box**: the connectors of one I/O device, each labeled with the channel or mix patched to it, so you
+  can cable the box without a list. The IONIC 16/24, LV1 Classic, DiGiGrid IOS-XL, IOX and D and DSPRO StageGrid
+  1000/4000 are drawn front and back as on the hardware (choose Front & Back, Front or Back); parts that are
+  not patch points (fan, power, network) are only faint outlines. Other devices show their connectors grouped
+  by port type (`src/lib/panels.ts` has the panel layouts). A red LED marks inputs with 48V on; phones and AES pairs share one connector (L/R). Read-only;
+  **Print…** prints the panels on white in landscape for the stage crew (or saves them as PDF from the print dialog);
+  **Print All…** prints every stage box of the show, one per page
 
 The device button in the toolbar (it shows the selected device) opens the device menu; a right-click on a
 device opens it too. For a DAW it sets the **Driver Channels** (patches on channels that no longer exist are

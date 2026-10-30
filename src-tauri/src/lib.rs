@@ -218,6 +218,19 @@ fn save(state: State<AppState>, id: u64, path: Option<String>, force: bool) -> C
     })
 }
 
+/// Print the window in landscape (the stage box panels are wide). WebKit ignores `@page { size }`
+/// and prints with the app's shared NSPrintInfo, so the orientation is set there; the print
+/// dialog can still change it.
+#[tauri::command]
+fn print_landscape(window: WebviewWindow) -> CmdResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSPaperOrientation, NSPrintInfo};
+        NSPrintInfo::sharedPrintInfo().setOrientation(NSPaperOrientation::Landscape);
+    }
+    window.print().map_err(|e| e.to_string())
+}
+
 /// macOS menu. The default one closes the whole window on ⌘W; here ⌘W closes a tab.
 /// Custom items are forwarded to the focused window as a "menu" event (the UI handles the
 /// same shortcuts itself on the other platforms, which have no menu bar).
@@ -315,7 +328,8 @@ pub fn run() {
             set_preamp,
             save,
             export_text,
-            modified_times
+            modified_times,
+            print_landscape
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

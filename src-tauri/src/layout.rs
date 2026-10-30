@@ -72,7 +72,8 @@ pub fn model_by_id(vendor_id: i64, device_id: i64) -> Option<&'static str> {
 
 /// Port layouts per model, from the manufacturers' specs (Waves SoundGrid interfaces chart; IONIC
 /// and LV1 Classic checked against Waves' data sheets and user guides).
-/// Order: analog inputs/line outputs first, then headphones, then digital, as on the IOS-XL.
+/// Order: analog inputs/line outputs first, then headphones, then digital. The IOS-XL is the
+/// exception: its AES output comes before the headphones, as AES does on its input side.
 /// Only IOS-XL and IOX are verified against real showfiles.
 fn model_layout(model: &str, dir: Dir) -> Option<Vec<Group>> {
     let mic = |n| ("Analog", "Mic/L", numbered(n));
@@ -83,7 +84,7 @@ fn model_layout(model: &str, dir: Dir) -> Option<Vec<Group>> {
     Some(match (model_key(model).as_str(), dir) {
         // DiGiGrid
         ("IOSXL", Dir::In) => vec![mic(8), aes(1)],
-        ("IOSXL", Dir::Out) => vec![line(8), phones(2), aes(1)],
+        ("IOSXL", Dir::Out) => vec![line(8), aes(1), phones(2)],
         ("IOX", Dir::In) => vec![mic(12)],
         // the data has 16 outputs; 7-8 do not exist on the IOX
         ("IOX", Dir::Out) => vec![line(6), hidden(2), phones(4)],
@@ -188,9 +189,9 @@ mod tests {
     fn known_models() {
         let out = ports("IOS-XL", false, Dir::Out, 14);
         let labels: Vec<_> = out.iter().map(|p| p.label.as_str()).collect();
-        assert_eq!(labels, ["1", "2", "3", "4", "5", "6", "7", "8", "1L", "1R", "2L", "2R", "L", "R"]);
-        assert_eq!(out[8].minor, "Phones");
-        assert_eq!(out[13].major, "Digital");
+        assert_eq!(labels, ["1", "2", "3", "4", "5", "6", "7", "8", "L", "R", "1L", "1R", "2L", "2R"]);
+        assert_eq!(out[8].minor, "AES");
+        assert_eq!(out[10].minor, "Phones");
 
         let iox = ports("IOX", false, Dir::Out, 16);
         assert_eq!(iox.len(), 14);
