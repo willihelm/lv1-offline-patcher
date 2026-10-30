@@ -35,6 +35,16 @@
   let busy = $state(false);
   let dragging = $state(false);
   let recentShows = $state(recent.load());
+  let recentTimes = $state<Record<string, number | null>>({});
+
+  // modification dates of the recent showfiles, re-read whenever the welcome page is shown
+  $effect(() => {
+    if (show) return;
+    const paths = [...recentShows];
+    api.modifiedTimes(paths).then((times) => {
+      recentTimes = Object.fromEntries(paths.map((p, i) => [p, times[i]]));
+    });
+  });
 
   const views: [PatchView, string][] = [
     ["input", "Input"],
@@ -63,6 +73,7 @@
   const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
   const dirName = (p: string) => p.slice(0, p.length - baseName(p).length).replace(/[\\/]$/, "");
   const fileName = $derived(show ? baseName(show.path) : "");
+  const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
   const tabTitle = (t: Tab) => (t.show ? baseName(t.show.path) : "New Tab");
   const status = $derived.by(() => {
     if (!grid || !hover || !device) return "";
@@ -742,6 +753,7 @@
             <button class="recentfile" title={p} disabled={busy} onclick={() => openPath(p)}>
               <strong>{baseName(p)}</strong>
               <span>{dirName(p)}</span>
+              {#if recentTimes[p]}<span>Modified {dateFormat.format(recentTimes[p])}</span>{/if}
             </button>
             <button class="forget" title="Remove from list" onclick={() => (recentShows = recent.remove(p))}>
               <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>

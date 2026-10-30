@@ -44,6 +44,8 @@ export async function invoke<T>(cmd: string, args: Record<string, any>): Promise
       return undefined as T;
     case "move_session":
       throw "Moving tabs between windows needs the desktop app";
+    case "modified_times":
+      return args.paths.map(() => null) as T;
   }
   // the session's state lives in the module variables while a command runs
   const session = sessions.get(args.id);

@@ -196,6 +196,18 @@ fn export_text(path: String, contents: String) -> CmdResult<()> {
     fs::write(path, contents).map_err(|e| e.to_string())
 }
 
+/// Modification time (ms since the epoch) of each path, `None` if it can't be read.
+#[tauri::command]
+fn modified_times(paths: Vec<String>) -> Vec<Option<u64>> {
+    paths
+        .iter()
+        .map(|p| {
+            let t = fs::metadata(p).and_then(|m| m.modified()).ok()?;
+            Some(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as u64)
+        })
+        .collect()
+}
+
 /// Save into the opened file (with backup), or into `path` as a patched copy.
 #[tauri::command]
 fn save(state: State<AppState>, id: u64, path: Option<String>, force: bool) -> CmdResult<SaveResult> {
@@ -302,7 +314,8 @@ pub fn run() {
             set_driver_channels,
             set_preamp,
             save,
-            export_text
+            export_text,
+            modified_times
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

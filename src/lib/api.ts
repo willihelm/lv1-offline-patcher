@@ -32,3 +32,5 @@ export const setPreamp = (id: number, idx: number, channel: number, gain: number
 export const save = (id: number, path: string | null, force: boolean) =>
   call<{ show: ShowState; backup: string | null }>("save", { id, path, force });
 export const exportText = (path: string, contents: string) => call<void>("export_text", { path, contents });
+/** modification time (ms since the epoch) per path, null if the file can't be read */
+export const modifiedTimes = (paths: string[]) => call<(number | null)[]>("modified_times", { paths });
