@@ -434,6 +434,8 @@ export interface ListEntry {
   color?: string;
   /** device to device: the mixer channels the same device input feeds */
   channels?: ListEntry[];
+  /** a device output, not a mixer channel or bus */
+  hwOut?: boolean;
 }
 
 export interface ListRow {
@@ -454,7 +456,7 @@ export function devicePatchList(show: ShowState, device: Device) {
   };
   const dstEntry = (d: Dst): ListEntry =>
     d.cluster === CLUSTER.HW_OUT
-      ? { label: portLabel(show.devices, d.index, d.channel, true) }
+      ? { label: portLabel(show.devices, d.index, d.channel, true), hwOut: true }
       : {
           label: `${stripLabel(show, d, show.inputs)}${d.cluster === CLUSTER.INPUT ? ` (Input ${d.section === 1 ? "B" : "A"})` : ""}`,
           name: stripName(d, show.inputs)?.concat(d.cluster === CLUSTER.INPUT && d.section === 1 ? " (B)" : ""),

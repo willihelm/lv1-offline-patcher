@@ -29,7 +29,11 @@
 
   // list rows are numbered from 1, panel channels from 0
   const byChannel = (rows: ListRow[]) => new Map(rows.map((r) => [r.channel - 1, r]));
-  const inRows = $derived(byChannel(inputs));
+  // device outputs fed straight from an input only label the connector when it feeds nothing in the mixer
+  const mixerFirst = (rows: ListRow[]) =>
+    rows.map((r) => (r.patch.some((e) => !e.hwOut) ? { ...r, patch: r.patch.filter((e) => !e.hwOut) } : r));
+  const ins = $derived(mixerFirst(inputs));
+  const inRows = $derived(byChannel(ins));
   const outRows = $derived(byChannel(outputs));
 
   function socketOf(s: PanelSocket): SocketData {
@@ -46,7 +50,7 @@
 
   const sections = $derived(
     [
-      { title: "Inputs", out: false, banks: socketBanks(inputs), show: part !== "outputs" },
+      { title: "Inputs", out: false, banks: socketBanks(ins), show: part !== "outputs" },
       { title: "Outputs", out: true, banks: socketBanks(outputs), show: part !== "inputs" },
     ].filter((s) => s.show && s.banks.length),
   );
