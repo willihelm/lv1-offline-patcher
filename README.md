@@ -3,73 +3,50 @@
 ![LV1 Offline Patcher: Input patch of an IOX with preamp gain and 48V](docs/screenshot.png)
 
 Desktop app for macOS and Windows (Tauri 2 / Rust + Svelte 5) for editing the patch of a Waves LV1 showfile (`.emo`)
-without the I/O hardware being online. The UI follows LV1's Patch page:
+without the I/O hardware being online.
 
-- **Input** (A/B): device inputs → channels (and Talkback)
-- **Output**: Direct (channel direct outs) and Mix Busses (groups, auxes, mains, matrices, cue)
-  → device outputs. The Source column sets the output source: INP, PRE, PST or PSP
+## Why
+
+I want to be able to patch my devices offline: at home, before the show, without the stage boxes and DAWs
+connected. For whatever reason LV1 only lets you patch devices that are currently available in the network. LV1 has
+"offline devices" that can be used as placeholders, but that is inconvenient, and when I tried it a while ago I lost all gain
+settings after swapping them for the real device. Maybe that has improved, but anyway.
+
+This app edits the patch directly in the showfile, for every device in it, online or not. It also adds some
+workflow improvements to patching, especially for DAWs: converting channel direct outs to device to device
+patches (and back), setting up a virtual soundcheck, or copying the patch from one device to another.
+
+It is not meant to replace Waves' offline editor. It does what Waves, for some reason, doesn't let you do
+with your session. Use LV1 for everything else.
+
+**To Waves Audio:** feel free to use the ideas here to make patching in LV1 better. I'd be happy if this app
+became unnecessary.
+
+## Usage
+
+The views follow LV1's Patch page:
+
+- **Input** (A/B): device inputs → channels, with gain and 48V of the selected device
+- **Output**: channel direct outs and mix busses → device outputs, including the output source (INP/PRE/PST/PSP)
 - **Device to Device**: device inputs → device outputs
-- **List**: everything patched on one device as a list: each input with gain, 48V and what it feeds, each
-  output with its source (All / Inputs / Outputs). If an output comes straight from a device input (device to
-  device), the list also shows the mixer channels that input feeds. **Export CSV…** saves it as a file
-- **Stage Box**: the connectors of one I/O device, each labeled with the channel or mix patched to it, so you
-  can cable the box without a list. The IONIC 16/24, LV1 Classic, DiGiGrid IOS-XL, IOX and D and DSPRO StageGrid
-  1000/4000 are drawn front and back as on the hardware (choose Front & Back, Front or Back); parts that are
-  not patch points (fan, power, network) are only faint outlines. Other devices show their connectors grouped
-  by port type (`src/lib/panels.ts` has the panel layouts). A red LED marks inputs with 48V on; phones and AES pairs share one connector (L/R). Read-only;
-  **Print…** prints the panels on white in landscape for the stage crew (or saves them as PDF from the print dialog);
-  **Print All…** prints every stage box of the show, one per page
+- **List**: everything patched on one device, exportable as CSV
+- **Stage Box**: the device's connectors labeled with what is patched to them, printable for the stage crew
 
-The device button in the toolbar (it shows the selected device) opens the device menu; a right-click on a
-device opens it too. For a DAW it sets the **Driver Channels** (patches on channels that no longer exist are
-removed). **Convert DO → D2D** (direct outs to device to device) repatches
-all channel direct outs on it straight from the device inputs that feed those channels (Input A,
-or Input B if A is empty), bypassing the mixer. Channels without an input patch are skipped and listed in
-the status bar. **Convert D2D → DO** goes the other way: every device input
-patched to the device becomes the direct out of the channel it feeds (if several channels use it:
-Input A first, then the lowest channel number). **Return Outputs to Input B** sets up a virtual
-soundcheck: every output of the device that carries a channel (its direct out, or a device input patched
-straight to the output that feeds the channel's Input A) comes back on the input of the same number of that
-device, patched to Input B of the channel. E.g. Bass on output 11 → input 11 → Bass Input B. Outputs
-without an input of the same number are skipped and listed in the status bar. Each conversion is one undo
-step.
+![Stage Box view of an IONIC 24](docs/stagebox.png)
 
-**Copy Patch from Device…** opens a dialog that gives a device the patch of another device, channel by
-channel. Choose the two devices and **Inputs** and/or **Outputs**; the preview lists every channel that
-changes with its patch now and after the copy. Uncheck channels to leave them as they are (Shift-click
-checks or unchecks a range). Copying inputs repatches everything the other device's inputs feed (channels in
-Input A and B, Talkback, device outputs) from the same inputs of this device. A destination has only one
-source, so these patches move away from the other device, e.g. when swapping a stage box. Copying outputs
-gives every output the source of the same output on the other device, or unpatches it; the other device
-keeps its outputs. Channels the target device doesn't have are listed but can't be copied. A copy is one
-undo step.
+The device menu (toolbar button or right-click on a device) has the workflow tools:
 
-**Export Patch List…** saves a CSV of the device (semicolon separated with decimal comma, for Excel and
-Numbers): every input with gain, 48V and what it feeds, then every output with its source.
+- **Convert DO → D2D / D2D → DO**: turn channel direct outs into device to device patches from the inputs
+  that feed those channels, or back
+- **Return Outputs to Input B**: virtual soundcheck, every recorded channel comes back on Input B
+- **Copy Patch from Device…**: give a device the input and/or output patch of another one, e.g. when
+  swapping a stage box, with a preview per channel
+- **Driver Channels** of a DAW, **Rename…**, **Export Patch List…**
 
-In the Input view, the rows above the column numbers show the preamps of the selected I/O device.
-Click **48V** to switch phantom power. Turn a gain knob by dragging up/down (Shift for fine)
-or with the arrow keys. Double-click (or Enter) types a value: Enter confirms,
-Tab moves to the next input, Esc cancels. Gain can be edited on the IOS-XL and IOX (0 to +59.5 dB
-in 0.5 dB steps) and on the IONIC 16/24 and LV1 Classic (0 to +60 dB in 1 dB steps). Other
-devices show their gain read-only because their range isn't known yet.
-
-Double-click a channel or bus name in the Input or Output view to rename it: Enter confirms, Tab moves to
-the next channel, Esc cancels. Rename a device by double-clicking it or with **Rename…** in the device menu.
-Names are written to the live state of the show; snapshots stored in the file keep
-their names. Each rename is one undo step.
-
-Click a cell to patch or unpatch it. Drag diagonally to patch a range; a drag that starts on a
-patched cell unpatches instead. Click row names to select them (shift for a range, ⌘/Ctrl to
-toggle), then press **Delete**. ⌘Z / ⇧⌘Z undo and redo, ⌘S saves, ⇧⌘S saves a patched copy
-(on Windows: Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S).
-Orange text marks patches that come from outside the current matrix (another device or source).
-
-Several showfiles can be open at once, in tabs and windows like in a web browser: ⌘T opens a
-new tab, ⌘N a new window, ⌘W closes a tab (asking if it has unsaved changes), ⌃Tab / ⇧⌘] and
-⌘1–9 switch tabs (on Windows: Ctrl+T, Ctrl+N, Ctrl+W, Ctrl+Tab, Ctrl+1–9). Drag a tab along the
-tab bar to reorder it. The button on a tab (or a right-click) moves it into a new window or into
-another open window. A file that is already open is not opened twice, its tab is shown instead.
+Click a cell to patch or unpatch, drag diagonally for a range. Double-click a name to rename it. Drag a
+gain knob or type a value (gain can be edited on IOS-XL, IOX, IONIC 16/24 and LV1 Classic). Several
+showfiles open in tabs and windows. Undo, redo and save use the usual shortcuts; nothing is written until
+you save.
 
 ## How it works
 
@@ -129,4 +106,5 @@ few named channels and patches.
 
 ## License
 
-[MIT](LICENSE). Not affiliated with or endorsed by Waves Audio.
+[MIT](LICENSE). Not affiliated with or endorsed by Waves Audio. The app writes to your showfiles; it makes a
+backup before every save, but keep your own copy of anything that matters.
