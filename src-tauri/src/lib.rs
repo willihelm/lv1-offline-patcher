@@ -304,15 +304,43 @@ fn open_in_lv1(state: State<AppState>, id: u64) -> CmdResult<()> {
 
 /// Print the window in landscape (the stage box panels are wide). WebKit ignores `@page { size }`
 /// and prints with the app's shared NSPrintInfo, so the orientation is set there; the print
-/// dialog can still change it.
+/// dialog can still change it. `title` is the job title, which "Save as PDF" uses as file name.
 #[tauri::command]
-fn print_landscape(window: WebviewWindow) -> CmdResult<()> {
+fn print_landscape(window: WebviewWindow, title: String) -> CmdResult<()> {
     #[cfg(target_os = "macos")]
     {
-        use objc2_app_kit::{NSPaperOrientation, NSPrintInfo};
-        NSPrintInfo::sharedPrintInfo().setOrientation(NSPaperOrientation::Landscape);
+        // wry's print() can't set the job title, so the print operation is run here the same way
+        window
+            .with_webview(move |wv| unsafe {
+                use objc2_app_kit::{NSPaperOrientation, NSPrintInfo};
+                use objc2_foundation::NSString;
+                use objc2_web_kit::WKWebView;
+                let webview: &WKWebView = &*wv.inner().cast();
+                let info = NSPrintInfo::sharedPrintInfo();
+                info.setOrientation(NSPaperOrientation::Landscape);
+                info.setTopMargin(0.0);
+                info.setRightMargin(0.0);
+                info.setBottomMargin(0.0);
+                info.setLeftMargin(0.0);
+                let op = webview.printOperationWithPrintInfo(&info);
+                op.setJobTitle(Some(&NSString::from_str(&title)));
+                op.setCanSpawnSeparateThread(true);
+                if let Some(w) = webview.window() {
+                    op.runOperationModalForWindow_delegate_didRunSelector_contextInfo(
+                        &w,
+                        None,
+                        None,
+                        std::ptr::null_mut(),
+                    );
+                }
+            })
+            .map_err(|e| e.to_string())
     }
-    window.print().map_err(|e| e.to_string())
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = title;
+        window.print().map_err(|e| e.to_string())
+    }
 }
 
 /// macOS menu. The default one closes the whole window on ⌘W; here ⌘W closes a tab.

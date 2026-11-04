@@ -90,12 +90,15 @@
   async function printBoxes(all: boolean) {
     printAll = all;
     await tick();
-    await api.printLandscape();
+    await api.printLandscape(`${sessionName} - ${all ? "all" : safeName(device!.name)}`);
   }
 
   const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
   const dirName = (p: string) => p.slice(0, p.length - baseName(p).length).replace(/[\\/]$/, "");
   const fileName = $derived(show ? baseName(show.path) : "");
+  const sessionName = $derived(fileName.replace(/\.emo$/i, ""));
+  /** `name` usable in a file name */
+  const safeName = (name: string) => name.replace(/[\\/:*?"<>|]/g, "_");
   const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
   const tabTitle = (t: Tab) => (t.show ? baseName(t.show.path) : "New Tab");
   const status = $derived.by(() => {
@@ -454,7 +457,7 @@
   async function exportPatchList(d: Device) {
     const t = tab;
     const csv = devicePatchCsv(show!, d);
-    const name = `${baseName(t.show!.path).replace(/\.emo$/i, "")} - ${d.name.replace(/[\\/:*?"<>|]/g, "_")}.csv`;
+    const name = `${baseName(t.show!.path).replace(/\.emo$/i, "")} - ${safeName(d.name)}.csv`;
     if (!isTauri()) {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
