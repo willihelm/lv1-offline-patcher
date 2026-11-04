@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/willihelm/lv1-offline-patcher/compare/v0.3.0...v0.4.0) (2026-11-04)
+
+
+### Features
+
+* check for updates on start and install them from the app ([9576eee](https://github.com/willihelm/lv1-offline-patcher/commit/9576eeec579f5ebf6354479eeaf87bb8740329a9))
+* check for updates on start and install them from the app ([434f2ba](https://github.com/willihelm/lv1-offline-patcher/commit/434f2ba7ab92a7c83d361d1b7010771199738152))
+
+
+### Bug Fixes
+
+* name printed PDFs after the session and stage box ([ccb256e](https://github.com/willihelm/lv1-offline-patcher/commit/ccb256e932fb9feacbeb69ae5cffb1392eaaa63d))
+
 ## [0.3.0](https://github.com/willihelm/lv1-offline-patcher/compare/v0.2.0...v0.3.0) (2026-11-01)
 
 
