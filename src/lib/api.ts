@@ -56,3 +56,18 @@ export function printLandscape(title: string): Promise<void> {
   document.title = old;
   return Promise.resolve();
 }
+
+/** a newer release on GitHub */
+export interface AvailableUpdate {
+  version: string;
+  /** the version running now */
+  current: string;
+  /** release notes (Markdown) */
+  notes: string | null;
+}
+/** null if up to date (always in a development build and the browser). The first check is shared by
+ * all windows; `force` asks GitHub again. */
+export const checkForUpdate = (force = false) =>
+  isTauri() ? invoke<AvailableUpdate | null>("check_for_update", { force }) : Promise.resolve(null);
+/** download and install the update the last check found, then restart; resolves only on failure */
+export const installUpdate = () => invoke<void>("install_update");

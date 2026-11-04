@@ -1,6 +1,7 @@
 mod iom;
 mod layout;
 mod show;
+mod updater;
 
 use std::collections::HashMap;
 use std::fs;
@@ -359,6 +360,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     };
     let app_menu = SubmenuBuilder::new(app, info.name.clone())
         .item(&PredefinedMenuItem::about(app, None, Some(about))?)
+        .item(&MenuItem::with_id(app, "check-for-updates", "Check for Updates…", true, None::<&str>)?)
         .separator()
         .services()
         .separator()
@@ -393,7 +395,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
+        .manage(updater::Pending::default())
         .setup(|_app| {
             #[cfg(target_os = "macos")]
             {
@@ -447,7 +451,9 @@ pub fn run() {
             reload,
             ignore_change,
             open_in_lv1,
-            print_landscape
+            print_landscape,
+            updater::check_for_update,
+            updater::install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

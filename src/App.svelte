@@ -1,10 +1,11 @@
 <script lang="ts">
+  import { getVersion } from "@tauri-apps/api/app";
   import { isTauri } from "@tauri-apps/api/core";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { LogicalPosition } from "@tauri-apps/api/dpi";
   import { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/menu";
   import { getAllWebviewWindows, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-  import { ask, open, save as saveDialog } from "@tauri-apps/plugin-dialog";
+  import { ask, message, open, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { onMount, tick } from "svelte";
   import * as api from "./lib/api";
   import PatchGrid from "./lib/PatchGrid.svelte";
@@ -12,6 +13,8 @@
   import StageBox from "./lib/StageBox.svelte";
   import { panelFor } from "./lib/panels";
   import CopyDialog from "./lib/CopyDialog.svelte";
+  import UpdateDialog from "./lib/UpdateDialog.svelte";
+  import { firstSighting } from "./lib/changelog";
   import * as recent from "./lib/recent";
   import {
     clearRowsOps,
@@ -321,6 +324,35 @@
     else if (c === "save-as") saveFile(true);
     else if (c === "next-tab") cycleTab(1);
     else if (c === "prev-tab") cycleTab(-1);
+    else if (c === "check-for-updates") checkForUpdates();
+  }
+
+  /** a newer release, found when the window opened or by "Check for Updates…" */
+  let update = $state<api.AvailableUpdate | null>(null);
+  let updateOpen = $state(false);
+
+  // checked once as the app starts (offline, it simply finds nothing); the changelog opens by itself
+  // the first time a release is found
+  api
+    .checkForUpdate()
+    .then((found) => {
+      update = found;
+      updateOpen = !!found && firstSighting(found.version);
+    })
+    .catch(() => {});
+
+  /** "Check for Updates…" in the app menu: unlike the check at startup it always answers */
+  async function checkForUpdates() {
+    try {
+      update = await api.checkForUpdate(true);
+      if (update) updateOpen = true;
+      else
+        await message(`Version ${await getVersion()} is the newest release.`, {
+          title: "LV1 Offline Patcher is up to date",
+        });
+    } catch (e) {
+      await message(String(e), { title: "Could not check for updates", kind: "warning" });
+    }
   }
 
   const isShowfile = (p: string) => /\.emo$/i.test(p);
@@ -534,7 +566,7 @@
   const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
   function keydown(e: KeyboardEvent) {
-    if (copyTo) return; // the copy dialog handles its own keys
+    if (copyTo || updateOpen) return; // the dialogs handle their own keys
     const mod = e.metaKey || e.ctrlKey;
     const k = e.key.toLowerCase();
     // file and tab shortcuts; in the macOS app the menu handles them and sends a "menu" event
@@ -679,6 +711,12 @@
 
   <header class="topbar">
     <div class="brand">LV1 <span>Offline Patcher</span></div>
+    {#if update}
+      <button class="update" onclick={() => (updateOpen = true)} title="LV1 Offline Patcher {update.version} is available">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13.5h10" /></svg>
+        Update to {update.version}
+      </button>
+    {/if}
     <button onclick={openFile} disabled={busy}>Open…</button>
     {#if show}
       <div class="file" title={show.path}>
@@ -947,6 +985,9 @@
   {#if copyTo && show}
     <CopyDialog {show} to={copyTo} onapply={applyCopy} onclose={() => (copyTo = null)} />
   {/if}
+  {#if update && updateOpen}
+    <UpdateDialog {update} onclose={() => (updateOpen = false)} />
+  {/if}
 </main>
 
 <style>
@@ -1074,6 +1115,29 @@
     font-weight: 800;
     font-size: 18px;
     margin-right: 8px;
+  }
+  .update {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    font-size: 12px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: 999px;
+  }
+  .update:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+  .update svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
   .brand span {
     font-weight: 400;

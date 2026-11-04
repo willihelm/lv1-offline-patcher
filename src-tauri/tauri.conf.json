@@ -47,5 +47,11 @@
     "macOS": {
       "minimumSystemVersion": "10.15"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg2M0UzMzJGNkQ4QkU1MzIKUldReTVZdHRMek0raHZCRkN2ZnNyUXFlSzZRNWhPL0ZNTXZ2OWJURGNEVzFIUTNneU0yOGtzdWkK",
+      "endpoints": ["https://github.com/willihelm/lv1-offline-patcher/releases/latest/download/latest.json"]
+    }
   }
 }

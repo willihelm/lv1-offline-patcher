@@ -79,6 +79,10 @@ code-signed: on macOS right-click the app and choose **Open** the first time (or
 `xattr -cr "/Applications/LV1 Offline Patcher.app"`); on Windows click **More info → Run anyway**
 in the SmartScreen dialog. Windows needs the WebView2 runtime, which the installer fetches if missing.
 
+The app checks for a new release when it starts and shows an **Update to …** button with the
+changelog; on macOS, **Check for Updates…** in the app menu asks again. Installing restarts the app
+and is refused while a showfile has unsaved changes.
+
 ## Development
 
 ```sh
@@ -94,7 +98,9 @@ release PR open that bumps the version in `package.json`, `tauri.conf.json` and 
 the `feat`/`fix` commits to `CHANGELOG.md`. `feat` bumps the minor version, `fix` the patch; a
 `Release-As: 1.0.0` line in a commit body picks the version. Merging the PR tags the commit, creates
 the GitHub release with the changelog as notes, and builds the macOS and Windows installers into it
-(`.github/workflows/release.yml`).
+(`.github/workflows/release.yml`). Those builds also carry the signed update bundles and the
+`latest.json` the in-app updater reads; signing them needs the repository secret
+`TAURI_SIGNING_PRIVATE_KEY`, the private half of `plugins.updater.pubkey` in `tauri.conf.json`.
 
 `npm run dev` also runs the UI in a plain browser with a mock backend. It loads
 `public/demo.json`, which you generate from the test session with
