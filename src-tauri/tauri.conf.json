@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LV1 Offline Patcher",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "identifier": "io.github.willihelm.lv1-offline-patcher",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -51,7 +51,9 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg2M0UzMzJGNkQ4QkU1MzIKUldReTVZdHRMek0raHZCRkN2ZnNyUXFlSzZRNWhPL0ZNTXZ2OWJURGNEVzFIUTNneU0yOGtzdWkK",
-      "endpoints": ["https://github.com/willihelm/lv1-offline-patcher/releases/latest/download/latest.json"]
+      "endpoints": [
+        "https://github.com/willihelm/lv1-offline-patcher/releases/latest/download/latest.json"
+      ]
     }
   }
 }
