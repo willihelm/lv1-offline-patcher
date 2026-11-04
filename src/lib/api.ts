@@ -46,5 +46,28 @@ export const reload = (id: number) => call<ShowState>("reload", { id });
 export const ignoreChange = (id: number) => call<void>("ignore_change", { id });
 /** open the showfile in LV1 (macOS) */
 export const openInLv1 = (id: number) => call<void>("open_in_lv1", { id });
-/** print the window in landscape; the browser prints with its own dialog */
-export const printLandscape = () => (isTauri() ? invoke<void>("print_landscape") : Promise.resolve(window.print()));
+/** print the window in landscape; the browser prints with its own dialog. `title` becomes the
+ * default file name when saving as PDF */
+export function printLandscape(title: string): Promise<void> {
+  if (isTauri()) return invoke<void>("print_landscape", { title });
+  const old = document.title;
+  document.title = title;
+  window.print();
+  document.title = old;
+  return Promise.resolve();
+}
+
+/** a newer release on GitHub */
+export interface AvailableUpdate {
+  version: string;
+  /** the version running now */
+  current: string;
+  /** release notes (Markdown) */
+  notes: string | null;
+}
+/** null if up to date (always in a development build and the browser). The first check is shared by
+ * all windows; `force` asks GitHub again. */
+export const checkForUpdate = (force = false) =>
+  isTauri() ? invoke<AvailableUpdate | null>("check_for_update", { force }) : Promise.resolve(null);
+/** download and install the update the last check found, then restart; resolves only on failure */
+export const installUpdate = () => invoke<void>("install_update");

@@ -50,9 +50,32 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      # tauri.release.conf.json adds the signed update bundles; tauri-action attaches them and the
+      # latest.json the app's updater reads (src-tauri/src/updater.rs). Needs the repository secret
+      # TAURI_SIGNING_PRIVATE_KEY, the private half of plugins.updater.pubkey in tauri.conf.json.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           tagName: ${{ needs.release-please.outputs.tag_name }}
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+
+  # The update dialog shows the notes from latest.json: put the release's changelog there.
+  updater-notes:
+    needs: [release-please, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json
+          notes=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          jq --arg notes "$notes" '.notes = $notes' latest.json > notes.json
+          mv notes.json latest.json
+          cat latest.json
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber latest.json
